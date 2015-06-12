@@ -4,6 +4,12 @@ import time
 import cpu_tools
 import pdb, ipdb
 import inspect
+import networkx as nx
+from networkx import DiGraph
+import os.path
+
+import logging
+logger = logging.getLogger(__name__)
 
 class Watcher(object):
     def __init__(self):
@@ -12,28 +18,49 @@ class Watcher(object):
         self.shitlist = {}
         self.callframes = []
         self.own_time = 0 # TODO
+        # Each tracker is a list of line numbers that have been visited; we are looking to
+        # identify a self-contained loop taking up a lot of time
+        self.tracker = None
 
     def trace_cb(self, frame, event, arg):
-        #print event
-        #print frame
-        #print frame.f_lineno
-        #print frame.f_trace
-        #print frame.f_code.co_filename
-        self.trace.append((event, arg, frame.f_code.co_filename, frame.f_lineno))
-        #if 'numpy' in frame.f_code.co_filename:
-            #self.f.write( str((frame.f_code.co_filename, frame.f_lineno)) + '\n')
-            #print (frame.f_code.co_filename, frame.f_lineno)
-        #    __main__.__dict__['lastframe'] = frame
+
+        if self.tracker is not None:
+            filename, lineno = os.path.abspath(frame.f_code.co_filename), frame.f_lineno
+            print "Call to %s" % frame.f_code.co_name
+            if self.tracker['file'] == filename:
+                # Defer to trace_line to do actual processing (see if we need to update tracker)
+                self.trace_line(frame,event,arg)
+                # Make sure trace_line gets called for line events (we won't get called here)
         return self.trace_line
 
+
     def trace_line(self, frame, event, arg):
-        self.trace.append((event, arg, frame.f_code.co_filename, frame.f_lineno))
+        """
+        Need to handle a few situations here.
+        - We still haven't looped back to the original line and are looking for it
+        - We have already looped back and now are simply ensuring we follow the loop
+        (and don't need to branch)
+        """
+        #if event in ('line', 'return':
+        if self.tracker is not None:
+            filename, lineno = os.path.abspath(frame.f_code.co_filename), frame.f_lineno
+            if (lineno == self.tracker['lineno'] and filename == self.tracker['file']
+                    and len(self.tracker['lines'])>1):
+                if self.tracker['idx'] == len(self.tracker['lines']):
+                    # Only print the first time...
+                    print "Got a loop in tracker!"
+                self.tracker['idx'] = 0
+            elif self.tracker['idx'] == len(self.tracker['lines']):
+                if self.tracker['lines'][-1] != (filename, lineno, event):
+                    self.tracker['lines'].append((filename, lineno, event))
+                    self.tracker['idx'] += 1
+
 
     def profile_cb(self, frame, event, arg):
         """ Main callback for setprofile """
         co = frame.f_code
         func_name = co.co_name
-        filename, lineno = frame.f_code.co_filename, frame.f_lineno
+        filename, lineno = os.path.abspath(frame.f_code.co_filename), frame.f_lineno
 
         if event in ('call', 'c_call'):
             # function name; start time; total time spent in nested functions
@@ -72,9 +99,16 @@ class Watcher(object):
         total_time = sum(self.cum_times.values())
         for (key, cumtime) in self.cum_times.items():
             pct = cumtime / float(total_time)
-            if cumtime > 0.3 and pct > 0.01:
-                #print key, "added to shitlist"
+            if cumtime > 0.3 and pct > 0.1:
+                logger.info("%s,%s added to shitlist"%key )
                 self.shitlist[key] = pct
+                if not self.tracker: #key not in self.trackers:
+
+                    self.tracker = {'file': key[0], 'lineno': key[1], 'lines': [key+('line',)], 'idx': 1}
+                    #if sys.gettrace():
+                    #    raise Exception("WTF, tracing enabled?? fn is %s"%str(sys.gettrace()))
+                    #else:
+                    sys.settrace(self.trace_cb)
             else:
                 try:
                     del self.shitlist[key]
@@ -85,11 +119,13 @@ class Watcher(object):
     def run(self, code, glob=globals(), loc=locals()):
         self.trace = []
         self.stack = []
+        sys.settrace(self.trace_cb)
         sys.setprofile(self.profile_cb)
         try:
             exec(code, glob, loc)
         finally:
             sys.setprofile(None)
+            sys.settrace(None)
 
 
 class Recognizer(object):
@@ -158,3 +194,21 @@ def get_indent(line):
 
 def multithread_einsum():
     pass
+
+def testHeimdall():
+    import numpy as np
+    watch = Watcher()
+    logger.setLevel(logging.DEBUG)
+    def f(a,b):
+        c = np.random.uniform(size=(a,b))
+        d = np.random.uniform(size=(b,a))
+        return np.dot(c,d)
+    def g():
+        for _ in range(3):
+            e = 2000
+            f(4000, e)
+
+    watch.run('g()', globals(), locals())
+    return watch
+
+

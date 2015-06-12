@@ -6,7 +6,7 @@ from networkx import DiGraph
 import struct
 import inspect
 import ast
-import codegen
+import astroid, astroid.utils
 
 #IMMEDIATE_IS_NARGS = {BUILD_TUPLE}
 
@@ -37,7 +37,7 @@ def get_free_vars(stmt):
 
 
 
-class VariableExtractor(ast.NodeVisitor):
+class VariableExtractor(astroid.utils.ASTWalker):
     """
     Goal is to identify three types of variables: those that are being loaded/read; those
     that are being modified; and those that may or may not be modified.
@@ -61,12 +61,11 @@ class VariableExtractor(ast.NodeVisitor):
     identifying what is used in a function call) you can use instance variables for
     parser state.
     """
-    def __init__(self, glob, loc):
+    def __init__(self):
+        super(VariableExtractor, self).__init__(self)
         self.varnames = set()
         self.assigned = set()
-        self.possible_impure_funcs = set()
-        self.glob, self.loc = glob, loc
-
+        self.function_calls = []
 
     def reset(self):
         self.varnames.clear()
@@ -74,46 +73,43 @@ class VariableExtractor(ast.NodeVisitor):
         self.possible_impure_funcs.clear()
 
 
-    def visit_Name(self, node):
-        self.varnames.add(node.id)
+    def visit_name(self, node):
+        self.varnames.add(node.as_string())
 
 
-    def visit_Assign(self, node):
+    def visit_assign(self, node):
         """ lhs marked as assigned """
         for tgt in node.targets:
-            self.assigned.add(codegen.to_source(tgt))
+            self.assigned.add(tgt.as_string())
         [self.visit(c) for c in node.targets]
         self.visit(node.value)
 
-    def visit_AugAssign(self, node):
-        self.assigned.add(codegen.to_source(node.target))
+
+    def visit_augassign(self, node):
+        self.assigned.add((node.target.as_string()))
         self.visit(node.target)
         self.visit(node.value)
 
-    def visit_Call(self, node):
-        """
-        params marked as "maybe assigned" UNLESS this is a function we know that is
-        pure wrt that param.
-        """
-        funcname = codegen.to_source(node.func)
-        if not is_pure_func(funcname):
-            self.possible_impure_funcs.add(eval(funcname, self.glob, self.loc))
+    def visit_callfunc(self, node):
+        # TODO: what if node.func is not just a name..?
         for n in node.args:
             self.visit(n)
-        for k in node.keywords:
-            self.visit(k.value)
         if node.starargs:
             self.visit(node.starargs)
         if node.kwargs:
             self.visit(node.kwargs)
 
-    def visit_Attribute(self, node):
-        # any Calls under here?  If so, visit
-        self.varnames.add(codegen.to_source(node))
-        self.visit(node.value)
+    def leave_callfunc(self, node):
+        """ add late so we get the right order of execution"""
+        self.function_calls.append(node)
 
-    def visit_Subscript(self, node):
-        self.varnames.add(codegen.to_source(node))
+    def visit_getattr(self, node):
+        # any Calls under here?  If so, visit
+        self.varnames.add(node.as_string())
+        self.visit(node.expr)
+
+    def visit_subscript(self, node):
+        self.varnames.add(node.as_string())
         self.visit(node.value)
         self.visit(node.slice)
 

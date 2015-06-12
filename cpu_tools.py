@@ -28,7 +28,11 @@ class CpuMeter(object):
         finish_total_jiffies = sum(all_jiffies)
         finish_work_jiffies = sum(all_jiffies[:3])
 
-        return (finish_work_jiffies-self.start_work_jiffies) / float(finish_total_jiffies-self.start_total_jiffies)
+        try:
+            return (finish_work_jiffies-self.start_work_jiffies) / float(finish_total_jiffies-self.start_total_jiffies)
+        except ZeroDivisionError:
+            # whatever
+            return 1.0
 
 
 

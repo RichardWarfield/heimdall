@@ -1,0 +1,93 @@
+!_TAG_FILE_FORMAT	2	/extended format; --format=1 will not append ;" to lines/
+!_TAG_FILE_SORTED	1	/0=unsorted, 1=sorted, 2=foldcase/
+!_TAG_PROGRAM_AUTHOR	Darren Hiebert	/dhiebert@users.sourceforge.net/
+!_TAG_PROGRAM_NAME	Exuberant Ctags	//
+!_TAG_PROGRAM_URL	http://ctags.sourceforge.net	/official site/
+!_TAG_PROGRAM_VERSION	5.9~svn20110310	//
+CONST_NAME_TRANSFORMS	/home/richard/workspace/astroid/astroid/rebuilder.py	/^CONST_NAME_TRANSFORMS = {'None':  None,$/;"	v
+REDIRECT	/home/richard/workspace/astroid/astroid/rebuilder.py	/^REDIRECT = {'arguments': 'Arguments',$/;"	v
+TreeRebuilder	/home/richard/workspace/astroid/astroid/rebuilder.py	/^    TreeRebuilder = TreeRebuilder3k$/;"	v	class:TreeRebuilder3k
+TreeRebuilder	/home/richard/workspace/astroid/astroid/rebuilder.py	/^class TreeRebuilder(object):$/;"	c
+TreeRebuilder3k	/home/richard/workspace/astroid/astroid/rebuilder.py	/^class TreeRebuilder3k(TreeRebuilder):$/;"	c
+_BIN_OP_CLASSES	/home/richard/workspace/astroid/astroid/rebuilder.py	/^_BIN_OP_CLASSES = {Add: '+',$/;"	v
+_BOOL_OP_CLASSES	/home/richard/workspace/astroid/astroid/rebuilder.py	/^_BOOL_OP_CLASSES = {And: 'and',$/;"	v
+_UNARY_OP_CLASSES	/home/richard/workspace/astroid/astroid/rebuilder.py	/^_UNARY_OP_CLASSES = {UAdd: '+',$/;"	v
+__init__	/home/richard/workspace/astroid/astroid/rebuilder.py	/^    def __init__(self, manager):$/;"	m	class:TreeRebuilder
+_create_yield_node	/home/richard/workspace/astroid/astroid/rebuilder.py	/^def _create_yield_node(node, parent, rebuilder, factory):$/;"	f
+_init_set_doc	/home/richard/workspace/astroid/astroid/rebuilder.py	/^def _init_set_doc(node, newnode):$/;"	f
+_lineno_parent	/home/richard/workspace/astroid/astroid/rebuilder.py	/^def _lineno_parent(oldnode, newnode, parent):$/;"	f
+_save_assignment	/home/richard/workspace/astroid/astroid/rebuilder.py	/^    def _save_assignment(self, node, name=None):$/;"	m	class:TreeRebuilder
+_set_infos	/home/richard/workspace/astroid/astroid/rebuilder.py	/^def _set_infos(oldnode, newnode, parent):$/;"	f
+visit	/home/richard/workspace/astroid/astroid/rebuilder.py	/^    def visit(self, node, parent):$/;"	m	class:TreeRebuilder
+visit_arg	/home/richard/workspace/astroid/astroid/rebuilder.py	/^    def visit_arg(self, node, parent):$/;"	m	class:TreeRebuilder3k
+visit_arguments	/home/richard/workspace/astroid/astroid/rebuilder.py	/^    def visit_arguments(self, node, parent):$/;"	m	class:TreeRebuilder
+visit_arguments	/home/richard/workspace/astroid/astroid/rebuilder.py	/^    def visit_arguments(self, node, parent):$/;"	m	class:TreeRebuilder3k
+visit_assattr	/home/richard/workspace/astroid/astroid/rebuilder.py	/^    def visit_assattr(self, node, parent):$/;"	m	class:TreeRebuilder
+visit_assert	/home/richard/workspace/astroid/astroid/rebuilder.py	/^    def visit_assert(self, node, parent):$/;"	m	class:TreeRebuilder
+visit_assign	/home/richard/workspace/astroid/astroid/rebuilder.py	/^    def visit_assign(self, node, parent):$/;"	m	class:TreeRebuilder
+visit_assname	/home/richard/workspace/astroid/astroid/rebuilder.py	/^    def visit_assname(self, node, parent, node_name=None):$/;"	m	class:TreeRebuilder
+visit_augassign	/home/richard/workspace/astroid/astroid/rebuilder.py	/^    def visit_augassign(self, node, parent):$/;"	m	class:TreeRebuilder
+visit_backquote	/home/richard/workspace/astroid/astroid/rebuilder.py	/^    def visit_backquote(self, node, parent):$/;"	m	class:TreeRebuilder
+visit_binop	/home/richard/workspace/astroid/astroid/rebuilder.py	/^    def visit_binop(self, node, parent):$/;"	m	class:TreeRebuilder
+visit_boolop	/home/richard/workspace/astroid/astroid/rebuilder.py	/^    def visit_boolop(self, node, parent):$/;"	m	class:TreeRebuilder
+visit_break	/home/richard/workspace/astroid/astroid/rebuilder.py	/^    def visit_break(self, node, parent):$/;"	m	class:TreeRebuilder
+visit_bytes	/home/richard/workspace/astroid/astroid/rebuilder.py	/^    def visit_bytes(self, node, parent):$/;"	m	class:TreeRebuilder
+visit_callfunc	/home/richard/workspace/astroid/astroid/rebuilder.py	/^    def visit_callfunc(self, node, parent):$/;"	m	class:TreeRebuilder
+visit_child	/home/richard/workspace/astroid/astroid/rebuilder.py	/^        def visit_child(child):$/;"	f	function:TreeRebuilder3k.visit_with
+visit_class	/home/richard/workspace/astroid/astroid/rebuilder.py	/^    def visit_class(self, node, parent):$/;"	m	class:TreeRebuilder
+visit_class	/home/richard/workspace/astroid/astroid/rebuilder.py	/^    def visit_class(self, node, parent):$/;"	m	class:TreeRebuilder3k
+visit_compare	/home/richard/workspace/astroid/astroid/rebuilder.py	/^    def visit_compare(self, node, parent):$/;"	m	class:TreeRebuilder
+visit_comprehension	/home/richard/workspace/astroid/astroid/rebuilder.py	/^    def visit_comprehension(self, node, parent):$/;"	m	class:TreeRebuilder
+visit_const	/home/richard/workspace/astroid/astroid/rebuilder.py	/^    def visit_const(self, node, parent):$/;"	m	class:TreeRebuilder
+visit_continue	/home/richard/workspace/astroid/astroid/rebuilder.py	/^    def visit_continue(self, node, parent):$/;"	m	class:TreeRebuilder
+visit_decorators	/home/richard/workspace/astroid/astroid/rebuilder.py	/^    def visit_decorators(self, node, parent):$/;"	m	class:TreeRebuilder
+visit_delete	/home/richard/workspace/astroid/astroid/rebuilder.py	/^    def visit_delete(self, node, parent):$/;"	m	class:TreeRebuilder
+visit_dict	/home/richard/workspace/astroid/astroid/rebuilder.py	/^    def visit_dict(self, node, parent):$/;"	m	class:TreeRebuilder
+visit_dictcomp	/home/richard/workspace/astroid/astroid/rebuilder.py	/^    def visit_dictcomp(self, node, parent):$/;"	m	class:TreeRebuilder
+visit_discard	/home/richard/workspace/astroid/astroid/rebuilder.py	/^    def visit_discard(self, node, parent):$/;"	m	class:TreeRebuilder
+visit_ellipsis	/home/richard/workspace/astroid/astroid/rebuilder.py	/^    def visit_ellipsis(self, node, parent):$/;"	m	class:TreeRebuilder
+visit_emptynode	/home/richard/workspace/astroid/astroid/rebuilder.py	/^    def visit_emptynode(self, node, parent):$/;"	m	class:TreeRebuilder
+visit_excepthandler	/home/richard/workspace/astroid/astroid/rebuilder.py	/^    def visit_excepthandler(self, node, parent):$/;"	m	class:TreeRebuilder
+visit_excepthandler	/home/richard/workspace/astroid/astroid/rebuilder.py	/^    def visit_excepthandler(self, node, parent):$/;"	m	class:TreeRebuilder3k
+visit_exec	/home/richard/workspace/astroid/astroid/rebuilder.py	/^    def visit_exec(self, node, parent):$/;"	m	class:TreeRebuilder
+visit_extslice	/home/richard/workspace/astroid/astroid/rebuilder.py	/^    def visit_extslice(self, node, parent):$/;"	m	class:TreeRebuilder
+visit_for	/home/richard/workspace/astroid/astroid/rebuilder.py	/^    def visit_for(self, node, parent):$/;"	m	class:TreeRebuilder
+visit_from	/home/richard/workspace/astroid/astroid/rebuilder.py	/^    def visit_from(self, node, parent):$/;"	m	class:TreeRebuilder
+visit_function	/home/richard/workspace/astroid/astroid/rebuilder.py	/^    def visit_function(self, node, parent):$/;"	m	class:TreeRebuilder
+visit_genexpr	/home/richard/workspace/astroid/astroid/rebuilder.py	/^    def visit_genexpr(self, node, parent):$/;"	m	class:TreeRebuilder
+visit_getattr	/home/richard/workspace/astroid/astroid/rebuilder.py	/^    def visit_getattr(self, node, parent):$/;"	m	class:TreeRebuilder
+visit_global	/home/richard/workspace/astroid/astroid/rebuilder.py	/^    def visit_global(self, node, parent):$/;"	m	class:TreeRebuilder
+visit_if	/home/richard/workspace/astroid/astroid/rebuilder.py	/^    def visit_if(self, node, parent):$/;"	m	class:TreeRebuilder
+visit_ifexp	/home/richard/workspace/astroid/astroid/rebuilder.py	/^    def visit_ifexp(self, node, parent):$/;"	m	class:TreeRebuilder
+visit_import	/home/richard/workspace/astroid/astroid/rebuilder.py	/^    def visit_import(self, node, parent):$/;"	m	class:TreeRebuilder
+visit_index	/home/richard/workspace/astroid/astroid/rebuilder.py	/^    def visit_index(self, node, parent):$/;"	m	class:TreeRebuilder
+visit_keyword	/home/richard/workspace/astroid/astroid/rebuilder.py	/^    def visit_keyword(self, node, parent):$/;"	m	class:TreeRebuilder
+visit_lambda	/home/richard/workspace/astroid/astroid/rebuilder.py	/^    def visit_lambda(self, node, parent):$/;"	m	class:TreeRebuilder
+visit_list	/home/richard/workspace/astroid/astroid/rebuilder.py	/^    def visit_list(self, node, parent):$/;"	m	class:TreeRebuilder
+visit_listcomp	/home/richard/workspace/astroid/astroid/rebuilder.py	/^    def visit_listcomp(self, node, parent):$/;"	m	class:TreeRebuilder
+visit_module	/home/richard/workspace/astroid/astroid/rebuilder.py	/^    def visit_module(self, node, modname, modpath, package):$/;"	m	class:TreeRebuilder
+visit_name	/home/richard/workspace/astroid/astroid/rebuilder.py	/^    def visit_name(self, node, parent):$/;"	m	class:TreeRebuilder
+visit_nameconstant	/home/richard/workspace/astroid/astroid/rebuilder.py	/^    def visit_nameconstant(self, node, parent):$/;"	m	class:TreeRebuilder3k
+visit_nonlocal	/home/richard/workspace/astroid/astroid/rebuilder.py	/^    def visit_nonlocal(self, node, parent):$/;"	m	class:TreeRebuilder3k
+visit_num	/home/richard/workspace/astroid/astroid/rebuilder.py	/^    def visit_num(self, node, parent):$/;"	m	class:TreeRebuilder
+visit_pass	/home/richard/workspace/astroid/astroid/rebuilder.py	/^    def visit_pass(self, node, parent):$/;"	m	class:TreeRebuilder
+visit_print	/home/richard/workspace/astroid/astroid/rebuilder.py	/^    def visit_print(self, node, parent):$/;"	m	class:TreeRebuilder
+visit_raise	/home/richard/workspace/astroid/astroid/rebuilder.py	/^    def visit_raise(self, node, parent):$/;"	m	class:TreeRebuilder
+visit_raise	/home/richard/workspace/astroid/astroid/rebuilder.py	/^    def visit_raise(self, node, parent):$/;"	m	class:TreeRebuilder3k
+visit_return	/home/richard/workspace/astroid/astroid/rebuilder.py	/^    def visit_return(self, node, parent):$/;"	m	class:TreeRebuilder
+visit_set	/home/richard/workspace/astroid/astroid/rebuilder.py	/^    def visit_set(self, node, parent):$/;"	m	class:TreeRebuilder
+visit_setcomp	/home/richard/workspace/astroid/astroid/rebuilder.py	/^    def visit_setcomp(self, node, parent):$/;"	m	class:TreeRebuilder
+visit_slice	/home/richard/workspace/astroid/astroid/rebuilder.py	/^    def visit_slice(self, node, parent):$/;"	m	class:TreeRebuilder
+visit_starred	/home/richard/workspace/astroid/astroid/rebuilder.py	/^    def visit_starred(self, node, parent):$/;"	m	class:TreeRebuilder3k
+visit_str	/home/richard/workspace/astroid/astroid/rebuilder.py	/^    def visit_str(self, node, parent):$/;"	m	class:TreeRebuilder
+visit_subscript	/home/richard/workspace/astroid/astroid/rebuilder.py	/^    def visit_subscript(self, node, parent):$/;"	m	class:TreeRebuilder
+visit_try	/home/richard/workspace/astroid/astroid/rebuilder.py	/^    def visit_try(self, node, parent):$/;"	m	class:TreeRebuilder3k
+visit_tryexcept	/home/richard/workspace/astroid/astroid/rebuilder.py	/^    def visit_tryexcept(self, node, parent):$/;"	m	class:TreeRebuilder
+visit_tryfinally	/home/richard/workspace/astroid/astroid/rebuilder.py	/^    def visit_tryfinally(self, node, parent):$/;"	m	class:TreeRebuilder
+visit_tuple	/home/richard/workspace/astroid/astroid/rebuilder.py	/^    def visit_tuple(self, node, parent):$/;"	m	class:TreeRebuilder
+visit_unaryop	/home/richard/workspace/astroid/astroid/rebuilder.py	/^    def visit_unaryop(self, node, parent):$/;"	m	class:TreeRebuilder
+visit_while	/home/richard/workspace/astroid/astroid/rebuilder.py	/^    def visit_while(self, node, parent):$/;"	m	class:TreeRebuilder
+visit_with	/home/richard/workspace/astroid/astroid/rebuilder.py	/^    def visit_with(self, node, parent):$/;"	m	class:TreeRebuilder
+visit_with	/home/richard/workspace/astroid/astroid/rebuilder.py	/^    def visit_with(self, node, parent):$/;"	m	class:TreeRebuilder3k
+visit_yield	/home/richard/workspace/astroid/astroid/rebuilder.py	/^    def visit_yield(self, node, parent):$/;"	m	class:TreeRebuilder
+visit_yieldfrom	/home/richard/workspace/astroid/astroid/rebuilder.py	/^    def visit_yieldfrom(self, node, parent):$/;"	m	class:TreeRebuilder3k

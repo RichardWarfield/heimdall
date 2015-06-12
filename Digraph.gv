@@ -1,0 +1,18 @@
+digraph {
+		"('assign', ('heimdall.py', 201))" -> "('use', ('heimdall.py', 208))"
+		"('callfunc', ('heimdall.py', 202))" -> "('function', ('heimdall.py', 202))"
+		"('assign', ('heimdall.py', 202))" -> "('use', ('heimdall.py', 204))"
+		"('assign', ('heimdall.py', 207))" -> "('use', ('heimdall.py', 208))"
+		"('assign', ('heimdall.py', 198))" -> "('use', ('heimdall.py', 204))"
+		"('assign', ('heimdall.py', 201))" -> "('use', ('heimdall.py', 203))"
+		"('assign', ('heimdall.py', 198))" -> "('use', ('heimdall.py', 202))"
+		"('assign', ('heimdall.py', 198))" -> "('use', ('heimdall.py', 203))"
+		"('assign', ('heimdall.py', 201))" -> "('use', ('heimdall.py', 202))"
+		"('callfunc', ('heimdall.py', 204))" -> "('function', ('heimdall.py', 204))"
+		"('assign', ('heimdall.py', 201))" -> "('use', ('heimdall.py', 203))"
+		"('assign', ('heimdall.py', 201))" -> "('use', ('heimdall.py', 202))"
+		"('callfunc', ('heimdall.py', 206))" -> "('function', ('heimdall.py', 206))"
+		"('callfunc', ('heimdall.py', 203))" -> "('function', ('heimdall.py', 203))"
+		"('assign', ('heimdall.py', 203))" -> "('use', ('heimdall.py', 204))"
+		"('callfunc', ('heimdall.py', 208))" -> "('function', ('heimdall.py', 208))"
+}
