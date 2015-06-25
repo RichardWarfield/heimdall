@@ -1,4 +1,5 @@
 import sys
+import numpy as np
 import __main__
 import time
 import cpu_tools
@@ -7,206 +8,212 @@ import inspect
 import networkx as nx
 from networkx import DiGraph
 import os.path
+import copy
 
+import runsnakerun.pstatsloader
+from threading import Thread
+import profile
+
+import optimizer, data_flow, watcher
 import logging
 logger = logging.getLogger(__name__)
 
-class Watcher(object):
+class Heimdall(object):
     def __init__(self):
-        self.trace = []
-        self.cum_times = {}
-        self.shitlist = {}
-        self.callframes = []
-        self.own_time = 0 # TODO
-        # Each tracker is a list of line numbers that have been visited; we are looking to
-        # identify a self-contained loop taking up a lot of time
-        self.tracker = None
+        self.done = False
+        self.optimizer = optimizer.Optimizer()
+        self.watcher = watcher.FunctionWatcher()
 
-    def trace_cb(self, frame, event, arg):
-
-        if self.tracker is not None:
-            filename, lineno = os.path.abspath(frame.f_code.co_filename), frame.f_lineno
-            print "Call to %s" % frame.f_code.co_name
-            if self.tracker['file'] == filename:
-                # Defer to trace_line to do actual processing (see if we need to update tracker)
-                self.trace_line(frame,event,arg)
-                # Make sure trace_line gets called for line events (we won't get called here)
-        return self.trace_line
+    def run(self, code, glob, loc):
+        self.profiler = Profiling(callback=self.p_callback, prof_shot_time=2)
+        self.profiler.run(code, glob, loc)
 
 
-    def trace_line(self, frame, event, arg):
-        """
-        Need to handle a few situations here.
-        - We still haven't looped back to the original line and are looking for it
-        - We have already looped back and now are simply ensuring we follow the loop
-        (and don't need to branch)
-        """
-        #if event in ('line', 'return':
-        if self.tracker is not None:
-            filename, lineno = os.path.abspath(frame.f_code.co_filename), frame.f_lineno
-            if (lineno == self.tracker['lineno'] and filename == self.tracker['file']
-                    and len(self.tracker['lines'])>1):
-                if self.tracker['idx'] == len(self.tracker['lines']):
-                    # Only print the first time...
-                    print "Got a loop in tracker!"
-                self.tracker['idx'] = 0
-            elif self.tracker['idx'] == len(self.tracker['lines']):
-                if self.tracker['lines'][-1] != (filename, lineno, event):
-                    self.tracker['lines'].append((filename, lineno, event))
-                    self.tracker['idx'] += 1
+    def p_callback(self, stattree):
+        print "Got p_callback"
+        target_func = self.optimizer.choose_function_to_optimize(stattree)
+        target = os.path.abspath(target_func.filename), target_func.name
+        print "Going to watch for %s" % str(target)
+
+        self.watcher.watch_next_invocation(target, self.watcher_callback)
+
+    def watcher_callback(self, line_history):
+        print line_history
+        self.dfg = data_flow.analyze_flow(self.watcher.tracer)
+        print "Going to start optimizer test now"
+        self.optimizer.optimize_test(self.watcher.target_func, self.dfg)
 
 
-    def profile_cb(self, frame, event, arg):
-        """ Main callback for setprofile """
-        co = frame.f_code
-        func_name = co.co_name
-        filename, lineno = os.path.abspath(frame.f_code.co_filename), frame.f_lineno
 
-        if event in ('call', 'c_call'):
-            # function name; start time; total time spent in nested functions
-            if (filename,lineno) in self.shitlist:
-                self.stack.append([func_name, time.time(), 0, cpu_tools.CpuMeter()])
-                # recursive debugger
-                #ipdb.set_trace()
-                self.callframes.append((filename, lineno, frame))
-            else:
-                self.stack.append([func_name, time.time(), 0, None])
-        elif event in ('return', 'c_return'):
-            other_name, other_starttime, other_nestedtime, cpumeter = self.stack.pop()
-            just_returned_fn_time = time.time() - other_starttime
-            # Increment the time spent in nested functions
-            if self.stack:
-                self.stack[-1][2] += just_returned_fn_time
-            cpu_pct = cpumeter.finish() if cpumeter else 0
 
-            if event == 'return':
-                key = other_name
-            elif event == 'c_return':
-                if arg.__module__:
-                    key = arg.__module__+'.'+arg.__name__
-                else:
-                    key = arg.__name__
 
-            self_time = just_returned_fn_time-other_nestedtime
-            self.trace.append((event, key, just_returned_fn_time, self_time, cpu_pct))
-            time_spent = self.cum_times.get((filename, lineno), 0)
-            self.cum_times[(filename, lineno)] = time_spent + self_time
 
-            self.update_shitlist()
+class Profiling(profile.Profile):
+    def __init__(self, callback, prof_shot_time=5):
+        profile.Profile.__init__(self)
+        self.prof_shot_time = prof_shot_time
+        self.old_dispatcher = self.dispatcher
+        self.dispatcher = self.heimdall_dispatch
+        self.callback = callback
 
-    def update_shitlist(self):
-        # Check if anyone needs to be added to the shit list (naughty function calls)
-        total_time = sum(self.cum_times.values())
-        for (key, cumtime) in self.cum_times.items():
-            pct = cumtime / float(total_time)
-            if cumtime > 0.3 and pct > 0.1:
-                logger.info("%s,%s added to shitlist"%key )
-                self.shitlist[key] = pct
-                if not self.tracker: #key not in self.trackers:
+    def heimdall_dispatch(self, frame, event, arg):
+        self.old_dispatcher(frame, event, arg)
+        if time.time() - self.starttime > self.prof_shot_time:
+            self.new_create_stats()
+            self.stattree = stats_to_tree(self.stats)
+            self.callback(self.stattree)
+            self.starttime = time.time()
 
-                    self.tracker = {'file': key[0], 'lineno': key[1], 'lines': [key+('line',)], 'idx': 1}
-                    #if sys.gettrace():
-                    #    raise Exception("WTF, tracing enabled?? fn is %s"%str(sys.gettrace()))
-                    #else:
-                    sys.settrace(self.trace_cb)
-            else:
-                try:
-                    del self.shitlist[key]
-                    #print key, "deleted from shitlist"
-                except KeyError:
-                    pass
+    def run(self, cmd, glob, loc):
+        self.starttime = time.time()
+        self.runctx(cmd, glob, loc)
 
-    def run(self, code, glob=globals(), loc=locals()):
-        self.trace = []
-        self.stack = []
-        sys.settrace(self.trace_cb)
-        sys.setprofile(self.profile_cb)
+
+    ###XXX
+    ### The below are re-implementations of several functions related to stats, for the purpose
+    ### of allowing us to get accurate stats before the cmd terminates without messing up
+    ### the continuing execution.
+
+    def new_simulate_cmd_complete(self):
+        get_time = self.get_time
+        t = get_time() - self.t
+        cur_copy = list(self.cur)
+        timings_copy = self.timings.copy()
+        while cur_copy[-1]:
+            # We *can* cause assertion errors here if
+            # dispatch_trace_return checks for a frame match!
+            self.simulate_trace_dispatch_return(cur_copy, timings_copy, cur_copy[-2], t)
+            t = 0
+        return timings_copy
+
+    def new_create_stats(self):
+        timings = self.new_simulate_cmd_complete()
+        self.new_snapshot_stats(timings)
+
+    def new_snapshot_stats(self, timings):
+        self.stats = {}
+        for func, (cc, ns, tt, ct, callers) in timings.items():
+            callers = callers.copy()
+            nc = 0
+            for callcnt in callers.values():
+                nc += callcnt
+            self.stats[func] = cc, nc, tt, ct, callers
+
+    def simulate_trace_dispatch_return(self, cur_copy, timings_copy, frame, t):
+        if frame is not cur_copy[-2]:
+            assert frame is cur_copy[-2].f_back, ("Bad return", cur_copy[-3])
+            self.simulate_trace_dispatch_return(cur_copy[-2], 0)
+
+        # Prefix "r" means part of the Returning or exiting frame.
+        # Prefix "p" means part of the Previous or Parent or older frame.
+
+        rpt, rit, ret, rfn, frame, rcur = cur_copy
+        rit = rit + t
+        frame_total = rit + ret
+
+        ppt, pit, pet, pfn, pframe, pcur = rcur
+        cur_copy[:6] = ppt, pit + rpt, pet + frame_total, pfn, pframe, pcur
+
+        timings = timings_copy
+        cc, ns, tt, ct, callers = timings[rfn]
+        if not ns:
+            # This is the only occurrence of the function on the stack.
+            # Else this is a (directly or indirectly) recursive call, and
+            # its cumulative time will get updated when the topmost call to
+            # it returns.
+            ct = ct + frame_total
+            cc = cc + 1
+
+        if pfn in callers:
+            callers[pfn] = callers[pfn] + 1  # hack: gather more
+            # stats such as the amount of time added to ct courtesy
+            # of this specific call, and the contribution to cc
+            # courtesy of this call.
+        else:
+            callers[pfn] = 1
+
+        timings[rfn] = cc, ns - 1, tt + rit, ct, callers
+
+        return 1
+
+    def old_run(self):
+        wthread = WorkerThread(code, glob, loc)
+        yappi.start(builtins=builtins)
+        wthread.start()
+        time.sleep(self.prof_shot_time)
+        yappi.stop()
+        stats = yappi.convert2pstats(yappi.get_func_stats())
+
+def stats_to_tree(stats):
+    rows = {}
+    for func, raw in stats.iteritems():
         try:
-            exec(code, glob, loc)
-        finally:
-            sys.setprofile(None)
-            sys.settrace(None)
+            rows[func] = row = runsnakerun.pstatsloader.PStatRow( func,raw )
+        except ValueError, err:
+            logger.info( 'Null row: %s', func )
+    for row in rows.itervalues():
+        row.weave( rows )
+    return find_root( rows )
 
 
-class Recognizer(object):
+def find_root( rows ):
+    """Attempt to find/create a reasonable root node from list/set of rows
 
-    def classify_c_fn(self, c_fn, args, avg_cpu_pct):
-        if is_sumproduct_op(c_fn):
-            return 'sumproduct'
+    rows -- key: PStatRow mapping
 
-
-
-def is_sumproduct_op(c_fn):
-    return 'numpy' in arg.__module__ and arg.__name__ in ('dot', 'tensordot', 'einsum')
-
-class Pitstop(object):
-
-    def try_fix_sumproduct(self, c_fn, args, avg_cpu_pct):
-        if avg_cpu_pct < 0.75:
-            # Try splitting it up into multiple threads
-            pass
-
-def replace_c_call(frame, newfn, args):
-    retval = newfn(*args)
-    frame.f_lineno = 1
-
-def replace_lines(module, ln_start, ln_end, newlines):
+    TODO: still need more robustness here, particularly in the case of
+    threaded programs.  Should be tracing back each row to root, breaking
+    cycles by sorting on cumulative time, and then collecting the traced
+    roots (or, if they are all on the same root, use that).
     """
-    Replace lines of a file with new code.
-
-    Parameters:
-        module: the module to replace code in
-        ln_start: the first line numberto replace
-        ln_end: the last line number to replace
-        newlines: a string
-
-    Returns:
-        A newly loaded module
-    """
-    pass
-
-def edit_function(func, module, ln_start, ln_end, newlines):
-    orig_source = list(inspect.getsourcelines(func)[0])
-
-    # adjust ln_start and ln_end to account for where the function begins in the file
-    ln_start_local = ln_start - func.func_code.co_firstlineno
-    ln_end_local = ln_end - func.func_code.co_firstlineno
-
-    # Replace the old lines with new lines, taking care to keep the same indent
-    indent = get_indent(orig_source[ln_start_local])
-    newlinelist = [indent+s.lstrip() for s in newlines.splitlines(True)]
-    new_source = orig_source[:ln_start_local]+newlinelist+orig_source[ln_end_local+1:]
-
-    # Finally replace the function in its module
-    exec(''.join(new_source), module.__dict__, locals())
-
-    # There will now be a function in local scope with the same name; return it
-    return locals()[func.func_name]
-
-def get_indent(line):
-    i = 0
-    idt = ''
-    while i < len(line) and line[i] in ('\t', ' '):
-        idt += line[i]
-        i += 1
-    return idt
+    maxes = sorted( rows.values(), key = lambda x: x.cumulative )
+    if not maxes:
+        raise RuntimeError( """Null results!""" )
+    root = maxes[-1]
+    roots = [root]
+    for key,value in rows.items():
+        if not value.parents:
+            logger.debug( 'Found node root: %s', value )
+            if value not in roots:
+                roots.append( value )
+    if len(roots) > 1:
+        root = runsnakerun.pstatsloader.PStatGroup(
+            directory='*',
+            filename='*',
+            name="<profiling run>",
+            children= roots,
+        )
+        root.finalize()
+    return root
 
 
-def multithread_einsum():
-    pass
+class WorkerThread(Thread):
+    def __init__(self, code, glob, loc):
+        Thread.__init__(self)
+        self.code, self.glob, self.loc = code, glob,loc
+
+    def run(self):
+        print "Worker starting: %s" % self.code
+        exec(self.code, self.glob, self.loc)
+        print "Worker done fo real"
+
+
+def f(a,b,c):
+    d = np.random.uniform(size=(a,b))
+    e = np.random.uniform(size=(b,c))
+    k = np.random.uniform(size=(c,a))
+    tmp1 = np.dot(d,e)
+    return np.dot(tmp1,k)
+def g(n):
+    for _ in range(n):
+        e = 3000
+        x = f(2000, e, 2000)
+    print x.shape
+
 
 def testHeimdall():
-    import numpy as np
     watch = Watcher()
     logger.setLevel(logging.DEBUG)
-    def f(a,b):
-        c = np.random.uniform(size=(a,b))
-        d = np.random.uniform(size=(b,a))
-        return np.dot(c,d)
-    def g():
-        for _ in range(3):
-            e = 2000
-            f(4000, e)
 
     watch.run('g()', globals(), locals())
     return watch

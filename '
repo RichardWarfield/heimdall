@@ -278,9 +278,7 @@ class DataFlowGraph(object):
     class DefFuncNode(Node):
         pass
     class CallFuncNode(Node):
-        """ Follows data across function calls. """
-        # TODO this could potentially use a different name as it is confusingly distinct
-        # from a call to an external (not in the DFG) function
+        """ Follows data across function calls """
         pass
 
     class Edge(object):
@@ -377,9 +375,6 @@ class DataFlowGraph(object):
             node = incoming(node)[1]
         assert isinstance(node, ExprNode)
         return node
-
-    def is_external_call(self, node):
-        return isinstance(node, astroid.CallFunc)
 
     def draw_digraph(self, **kwargs):
         dfd = Digraph()

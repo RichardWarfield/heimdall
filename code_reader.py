@@ -74,7 +74,7 @@ class VariableExtractor(astroid.utils.ASTWalker):
 
 
     def visit_name(self, node):
-        self.varnames.add(node.as_string())
+        self.varnames.add(node)
 
 
     def visit_assign(self, node):
@@ -105,11 +105,12 @@ class VariableExtractor(astroid.utils.ASTWalker):
 
     def visit_getattr(self, node):
         # any Calls under here?  If so, visit
-        self.varnames.add(node.as_string())
+        #self.varnames.add(node)
+        # TODO greater granularity ...
         self.visit(node.expr)
 
     def visit_subscript(self, node):
-        self.varnames.add(node.as_string())
+        #self.varnames.add(node)
         self.visit(node.value)
         self.visit(node.slice)
 
