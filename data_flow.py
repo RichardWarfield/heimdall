@@ -2,6 +2,7 @@
 import ast
 #import networkx as nx
 from graphviz import Digraph
+import inspect
 import astroid
 import code_reader
 import copy
@@ -117,8 +118,7 @@ def analyze_flow(stmt_sequence):
                         dfg.add_assign_edge(stmt_idx, (filename,lineno), target, st.value)
 
             for var in vardeps:
-                # Have to be a little careful... if this is a scoped node defn (function, class, module)
-                # then st.scope() is the scope of that node, not its parent (which is what we want)
+                #
                 resolved_internally = False
                 asmts = get_enclosing_scope(st).lookup(var.name)[1]
                 for asmt in asmts:
@@ -136,7 +136,11 @@ def analyze_flow(stmt_sequence):
                             # Add all the parents of this node, up to the statement
                             pst = var
                             while not pst.parent.is_statement:
-                                dfg.add_composition_edge(stmt_idx, (file, lineno), pst, pst.parent)
+                                func_call_parent = get_func_for_arg(pst)
+                                if (func_call_parent is not None and get_func_def(func_call_parent, filenames,st) is None):
+                                    dfg.add_external_call(stmt_idx, (file, lineno), func_call_parent)
+                                else:
+                                    dfg.add_composition_edge(stmt_idx, (file, lineno), pst, pst.parent)
                                 pst = pst.parent
 
                     # A var dependency is internal if it is assigned somewhere in our statement list,
@@ -145,12 +149,10 @@ def analyze_flow(stmt_sequence):
                         resolved_internally = True
 
                 if not resolved_internally:
-                    dfg.add_external_dep(var.name, stmt_idx, filename, lineno, st)
+                    dfg.add_external_dep(var.name, stmt_idx, filename, lineno, var)
 
 
-            # fncalls should be in precisely the order that we will call from here.  So
-            # we need to reverse it.
-            #call_stack.extend(fncalls[::-1])
+            # fncalls should be in precisely the order that we will call from here.
             for fcall in fncalls:
                 func_def = get_func_def(fcall, filenames, st)
                 if func_def is not None:
@@ -199,6 +201,15 @@ def get_func_def(func_call, filenames, ast_context):
     if len(func_defs) == 1 and func_defs[0].root().file in filenames:
         func_def = func_defs[0]
         return func_def
+    else:
+        return None
+
+def get_func_for_arg(ast_node):
+    """ If the given node is a direct argument of some function call, return the CallFunc node """
+    if isinstance(ast_node.parent, astroid.CallFunc):
+        return ast_node.parent
+    elif isinstance(ast_node.parent, astroid.Keyword):
+        return ast_node.parent.parent
     else:
         return None
 
@@ -274,6 +285,11 @@ class DataFlowGraph(object):
 
     class ExprNode(Node):
         pass
+    class ExtCallNode(ExprNode):
+        """ An ExtCallNode is an ExprNode that represents a call to a function external to this
+        graph (i.e. we won't step through it).  The node needs to keep track of the call signature in
+        terms of the incoming edges -- i.e. edges are labelled in terms of their position or keyword """
+        pass
 
     class DefFuncNode(Node):
         pass
@@ -322,13 +338,14 @@ class DataFlowGraph(object):
 
     def add_assign_use_edge(self, stmt_idx, asmt_line, use_line, asmt_node, use_node):
         n1 = self.VarAssignNode(None, asmt_line[0], asmt_line[1], asmt_node)
-        n2 = self.VarUseNode(stmt_idx, use_line[0], use_line[1], use_node)
+        n2 = self.ExprNode(stmt_idx, use_line[0], use_line[1], use_node)
         self.nodes.add(n1)
         self.nodes.add(n2)
         e = self.AssignUseEdge(n1, n2, use_node.name)
         self.edges.add(e)
 
     def add_composition_edge(self, stmt_idx, line, used_node, using_node):
+
         n1 = self.ExprNode(stmt_idx, line[0], line[1], used_node)
         n2 = self.ExprNode(stmt_idx, line[0], line[1], using_node)
         self.nodes.add(n1)
@@ -344,6 +361,23 @@ class DataFlowGraph(object):
         self.nodes.add(n2)
         e = self.CallFuncEdge(n1, n2, func_node.name)
         self.edges.add(e)
+
+    def add_external_call(self, stmt_idx, line, callfunc_ast_node):
+        callnode = self.ExtCallNode(stmt_idx, line[0], line[1], callfunc_ast_node)
+        self.nodes.add(callnode)
+        for (pos,a) in enumerate(callfunc_ast_node.args):
+            if isinstance(a, astroid.Keyword):
+                argnode = self.ExprNode(stmt_idx, line[0], line[1], a.value)
+                e = self.CompositionEdge(argnode, callnode, a.arg)
+                e.keyword = a.arg
+            else:
+                argnode = self.ExprNode(stmt_idx, line[0], line[1], a)
+                e = self.CompositionEdge(argnode, callnode, str(pos))
+                e.argpos = pos
+            self.nodes.add(argnode)
+            self.edges.add(e)
+
+
 
     def add_return_edge(self, stmt_idx, returnfrom, returnto, ret_node, ret_to_node):
         n1 = self.Node(stmt_idx, returnfrom[0], returnfrom[1], ret_node.value)
@@ -369,17 +403,120 @@ class DataFlowGraph(object):
         else:
             self.external_deps[var, get_enclosing_scope(ast_node)] = [(stmt_idx, filename, lineno, ast_node)]
 
-    def last_expr(self, node):
-        """ Gets the last ExprNode that operated on the ExprNode given by node. """
-        # XXX I assume any node with more than one incoming edge is an ExprNode
-        assert isinstance(node, ExprNode)
-        while len(incoming(node)) == 1:
-            node = incoming(node)[1]
-        assert isinstance(node, ExprNode)
-        return node
+    def last_transform(self, node):
+        """ Gets the last Node that operated on node, other than a Name or AssName. """
+        # XXX is this really the right logic??
+        #assert isinstance(node, self.ExprNode), "Not ExprNode:"+str(node)
+        #print "length of inputs ", node, len(self.get_inputs(node))
+        cur = node
+        while (len(self.get_inputs(cur)) == 1
+            and cur == node or type(cur.ast_node) in (astroid.Name, astroid.AssName)):
+            (cur,) = self.get_inputs(cur)
+        assert isinstance(cur, self.ExprNode)
+        return cur
+
+    def get_inputs(self, node):
+        """ Returns the nodes that have edges to this node """
+        # TODO make a less stupid implementation of this
+        return {e.n1 for e in self.edges if e.n2 == node}
+
+    def get_inputs_multi(self, nodes):
+        res = set()
+        for n in nodes:
+            res.update(n.get_inputs)
+        return res
+
+    def get_incoming_edges(self, node):
+        """ Returns the edges into this node """
+        # TODO make a less stupid implementation of this
+        return {e for e in self.edges if e.n2 == node}
+
+    def bind_args(self, extcall_node, fn, signature=None):
+        """ Uses inspect.getcallargs to match up the arguments to the given python function with
+        the syntax of the external call node.
+
+        This ONLY works for Python functions unfortunately!!
+
+        Returns a dictionary with mappings {param name: incoming dfg node}
+        """
+        args = []
+        kwargs = {}
+        for e in self.get_incoming_edges(extcall_node):
+            try:
+                args.append((e.argpos, e.n1))
+            except AttributeError:
+                kwargs[e.keyword] = e.n1
+        args = sorted(args, key=lambda t: t[0])
+        args = [t[1] for t in args]
+        return inspect.getcallargs(fn, *args, **kwargs)
+
+    def get_callarg_value_node(self, extcall_node, name, pos, default=None):
+        for e in self.get_incoming_edges(extcall_node):
+            try:
+                if name == e.keyword:
+                    return e.n1
+            except AttributeError:
+                if pos == e.argpos:
+                    return e.n1
+        return default
+
+
+    def get_outputs(self, node):
+        """ Returns the nodes that have edges from this node """
+        # TODO make a less stupid implementation of this
+        return {e.n2 for e in self.edges if e.n1 == node}
+
+
+    def get_outgoing_edges(self, node):
+        """ Returns the nodes that have edges from this node """
+        # TODO make a less stupid implementation of this
+        return {e for e in self.edges if e.n1 == node}
+
+
+    def subgraph_between(self, start_nodes, end_node):
+        """ Return the nodes and edges reached while traversing the graph from start_nodes
+        (exclusive) to end_node (inclusive) """
+        ret_nodes, ret_edges = set(), set()
+        ret_nodes.add(end_node)
+
+        def sg_between_inner(start_node):
+            outgoing_edges = self.get_outgoing_edges(start_node)
+            assert len(outgoing_edges) > 0, "Reached end of graph without seeing end node %s"%str(start_node)
+            for e in outgoing_edges:
+                ret_edges.add(e)
+                if e.n2 not in ret_nodes:
+                    ret_nodes.add(e.n2)
+                    sg_between_inner(e.n2)
+
+        for sn in start_nodes:
+            sg_between_inner(sn)
+
+        return ret_nodes, ret_edges
+
+
 
     def is_external_call(self, node):
-        return isinstance(node, astroid.CallFunc)
+        return isinstance(node.ast_node, astroid.CallFunc)
+
+    def has_nonlocal_scope(self, node):
+        """ True if the variable represented by this node has non-local (global or closure) scope """
+        # TODO
+        return False
+
+    def fanout(self, node):
+        """ The number of ExprNodes that depend directly on this node.  "Directly" means there is no
+        intervening ExprNode, but there may be other intervening nodes. """
+        res = 0
+        to_visit = self.get_outputs(node)
+        while len(to_visit) > 0:
+            cur = to_visit.pop()
+            #print "fanout visiting ", cur
+            if isinstance(cur, self.ExprNode):
+                res += 1
+            else:
+                to_visit.update(self.get_outputs(cur))
+        return res
+
 
     def draw_digraph(self, **kwargs):
         dfd = Digraph()

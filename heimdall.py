@@ -38,10 +38,10 @@ class Heimdall(object):
         self.watcher.watch_next_invocation(target, self.watcher_callback)
 
     def watcher_callback(self, line_history):
-        print line_history
+        print "Line history:", line_history
         self.dfg = data_flow.analyze_flow(self.watcher.tracer)
         print "Going to start optimizer test now"
-        self.optimizer.optimize_test(self.watcher.target_func, self.dfg)
+        self.optimizer.optimize_matrix_chain(self.watcher.target_func, self.dfg)
 
 
 
@@ -198,16 +198,20 @@ class WorkerThread(Thread):
         print "Worker done fo real"
 
 
-def f(a,b,c):
-    d = np.random.uniform(size=(a,b))
-    e = np.random.uniform(size=(b,c))
-    k = np.random.uniform(size=(c,a))
-    tmp1 = np.dot(d,e)
-    return np.dot(tmp1,k)
+def f(a,b,c,d):
+    rng = np.random.RandomState(55)
+    j = rng.uniform(size=(a,b))
+    k = rng.uniform(size=(b,c))
+    m = rng.uniform(size=(c,d))
+    tmp1 = np.dot(j,k)
+    y = np.dot(tmp1,m)
+    return y
 def g(n):
-    for _ in range(n):
-        e = 3000
-        x = f(2000, e, 2000)
+    for i in range(n):
+        e = 2500
+        t = time.time()
+        x = f(1500, e, 4000, 1000)
+        print "g iter %i Took %f seconds, sum is %f" %(i, time.time() - t, x.sum())
     print x.shape
 
 

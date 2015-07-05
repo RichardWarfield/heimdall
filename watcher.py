@@ -5,6 +5,7 @@ import cpu_tools
 import pdb, ipdb
 import os.path
 import copy
+from aplus import Promise
 
 import logging
 logger = logging.getLogger(__name__)
@@ -34,6 +35,7 @@ class FunctionWatcher(object):
 
         # XXX Why do I need to use both settrace and setprofile?  settrace doesn't
         # XXX trigger on return events, and setprofile doesn't trigger on line events...
+        self.old_trace, self.old_profile = sys.gettrace(), sys.getprofile()
         sys.settrace(self.trace_cb)
         sys.setprofile(self.profile_cb)
         self.finished_callback = callback
@@ -55,11 +57,17 @@ class FunctionWatcher(object):
         co = frame.f_code
         func_name = co.co_name
         filename, lineno = os.path.abspath(frame.f_code.co_filename), frame.f_lineno
+
         if (filename, lineno) in self.needed_info:
             ni = self.needed_info[(filename, lineno)]
-            expr = [x.as_string() for x in ni.ast_node] if hasattr(ni.ast_node, __getitem__) else ni.ast_node.as_string)
-            res = eval(expr, frame.f_globals, frame.f_locals)
-            self.saved_info[ni] = res if ni.fn is None else ni.fn(res)
+            #print "in trace line, getting info"
+            #print "trace_line evaluating the following expression: ", expr
+            try:
+                res = eval(ni.expr, frame.f_globals, frame.f_locals)
+            except Exception as detail:
+                print detail
+                raise
+            self.saved_info[ni] = res
 
         self.tracer.append((filename, lineno, event))
 
@@ -77,7 +85,7 @@ class FunctionWatcher(object):
             #    print "In invocation of %s, frame is %s, outer is %s" % (func_name, str(frame), str(frame.f_back))
             if (filename,func_name) == self.target_func:
                 if not self.tracing:
-                    print "Starting trace"
+                    print "Starting trace", func_name, lineno
                     self.tracing = True
                     self.start_trace_frame = frame
                 # XXX Is this the right function?  Could another have the same name?
@@ -113,7 +121,7 @@ class FunctionWatcher(object):
             self.cum_times[(filename, lineno)] = time_spent + self_time
 
             if other_frame == self.start_trace_frame:
-                print "Returning from %s and terminating trace" % key
+                print "Returning from %s and terminating trace" % key, func_name, lineno
                 # Returning from where we started tracing
                 self.stop_watching()
                 self.finished_callback(self.tracer)
@@ -122,8 +130,8 @@ class FunctionWatcher(object):
     def stop_watching(self):
         self.tracing = False
         self.start_trace_frame = None
-        sys.setprofile(None)
-        sys.settrace(None)
+        sys.setprofile(None)#self.old_profile)
+        sys.settrace(None)#self.old_trace)
 
 
 class NeededInfo(object):
@@ -133,11 +141,32 @@ class NeededInfo(object):
 
     ast_node can be an astroid node or a of astroid nodes.
     """
-    def __init__(self, line, ast_node, fn=None):
-        self.line, self.ast_node, self.fn = line, ast_node, fn
+    def __init__(self, line, expr, dfg_node=None):
+        self.line, self.expr, self.dfg_node = line, expr, dfg_node
 
-class Promise(object):
-    pass
+    def __repr__(self):
+        return "NeededInfo: "+str((self.line[0], self.line[1], self.expr, self.dfg_node))
+
+
+def get_runtime_info(func, info_or_list):
+    """ Returns a promise representing the eventual collection of the data in info_or_list
+    (which is a NeededInfo or list thereof. """
+    res = Promise()
+
+    # In a list so we can modify (delete) the object. Otherwise this may not get
+    # garbage collected quickly because of the circular dependecny between the closure and
+    # FunctionWatcher object..?
+    fw = [FunctionWatcher()]
+
+    def _get_runtime_info_inner(tracer):
+        #print "In _get_runtime_info_inner with saved_info", fw[0].saved_info
+        #print "gettrace", sys.gettrace()
+        res.fulfill(fw[0].saved_info)
+        fw[0] = None # Make sure it gets destroyed..
+
+    fw[0].watch_next_invocation(func, _get_runtime_info_inner, info_or_list)
+    return res
+
 
 class RuntimeInfoPromise(Promise):
     def __init__(self, func, info_or_list):
@@ -148,14 +177,18 @@ class RuntimeInfoPromise(Promise):
         Execute this promise, then pass the result to next_fn.
         If next_fn is another Promise, then pass the result to its then method.
         """
-        fw = FunctionWatecher()
+        fw = FunctionWatcher()
         def then_inner():
-            if isinstance(next_fn, Promise):
-                next_fn.then(fw.saved_info)
+            next_fn.then(fw.saved_info)
+            if isinstance(res, Promise):
+                res.then()
             else:
                 next_fn(fw.saved_info)
 
         fw.watch_next_invocation(self.func, then_inner, self.info_or_list)
+
+    def done(self, next_fn):
+        pass
 
     def then_each(self, next_fn):
         fw = FunctionWatecher()
@@ -166,118 +199,3 @@ class RuntimeInfoPromise(Promise):
 
 
 
-class Watcher(object):
-    def __init__(self):
-        self.trace = []
-        self.cum_times = {}
-        self.shitlist = {}
-        self.callframes = []
-        self.own_time = 0 # TODO
-        # Each tracker is a list of line numbers that have been visited; we are looking to
-        # identify a self-contained loop taking up a lot of time
-        self.tracker = None
-
-    def trace_cb(self, frame, event, arg):
-
-        if self.tracker is not None:
-            filename, lineno = os.path.abspath(frame.f_code.co_filename), frame.f_lineno
-            print "Call to %s" % frame.f_code.co_name
-            if self.tracker['file'] == filename:
-                # Defer to trace_line to do actual processing (see if we need to update tracker)
-                self.trace_line(frame,event,arg)
-                # Make sure trace_line gets called for line events (we won't get called here)
-        return self.trace_line
-
-
-    def trace_line(self, frame, event, arg):
-        """
-        Need to handle a few situations here.
-        - We still haven't looped back to the original line and are looking for it
-        - We have already looped back and now are simply ensuring we follow the loop
-        (and don't need to branch)
-        """
-        #if event in ('line', 'return':
-        if self.tracker is not None:
-            filename, lineno = os.path.abspath(frame.f_code.co_filename), frame.f_lineno
-            if (lineno == self.tracker['lineno'] and filename == self.tracker['file']
-                    and len(self.tracker['lines'])>1):
-                if self.tracker['idx'] == len(self.tracker['lines']):
-                    # Only print the first time...
-                    print "Got a loop in tracker!"
-                self.tracker['idx'] = 0
-            elif self.tracker['idx'] == len(self.tracker['lines']):
-                if self.tracker['lines'][-1] != (filename, lineno, event):
-                    self.tracker['lines'].append((filename, lineno, event))
-                    self.tracker['idx'] += 1
-
-
-    def profile_cb(self, frame, event, arg):
-        """ Main callback for setprofile """
-        co = frame.f_code
-        func_name = co.co_name
-        filename, lineno = os.path.abspath(frame.f_code.co_filename), frame.f_lineno
-
-        if event in ('call', 'c_call'):
-            # function name; start time; total time spent in nested functions
-            if (filename,lineno) in self.shitlist:
-                self.stack.append([func_name, time.time(), 0, cpu_tools.CpuMeter()])
-                # recursive debugger
-                #ipdb.set_trace()
-                self.callframes.append((filename, lineno, frame))
-            else:
-                self.stack.append([func_name, time.time(), 0, None])
-        elif event in ('return', 'c_return'):
-            other_name, other_starttime, other_nestedtime, cpumeter = self.stack.pop()
-            just_returned_fn_time = time.time() - other_starttime
-            # Increment the time spent in nested functions
-            if self.stack:
-                self.stack[-1][2] += just_returned_fn_time
-            cpu_pct = cpumeter.finish() if cpumeter else 0
-
-            if event == 'return':
-                key = other_name
-            elif event == 'c_return':
-                if arg.__module__:
-                    key = arg.__module__+'.'+arg.__name__
-                else:
-                    key = arg.__name__
-
-            self_time = just_returned_fn_time-other_nestedtime
-            self.trace.append((event, key, just_returned_fn_time, self_time, cpu_pct))
-            time_spent = self.cum_times.get((filename, lineno), 0)
-            self.cum_times[(filename, lineno)] = time_spent + self_time
-
-            self.update_shitlist()
-
-    def update_shitlist(self):
-        # Check if anyone needs to be added to the shit list (naughty function calls)
-        total_time = sum(self.cum_times.values())
-        for (key, cumtime) in self.cum_times.items():
-            pct = cumtime / float(total_time)
-            if cumtime > 0.3 and pct > 0.1:
-                logger.info("%s,%s added to shitlist"%key)
-                self.shitlist[key] = pct
-                if not self.tracker: #key not in self.trackers:
-
-                    self.tracker = {'file': key[0], 'lineno': key[1], 'lines': [key+('line',)], 'idx': 1}
-                    #if sys.gettrace():
-                    #    raise Exception("WTF, tracing enabled?? fn is %s"%str(sys.gettrace()))
-                    #else:
-                    sys.settrace(self.trace_cb)
-            else:
-                try:
-                    del self.shitlist[key]
-                    #print key, "deleted from shitlist"
-                except KeyError:
-                    pass
-
-    def run(self, code, glob=globals(), loc=locals()):
-        self.trace = []
-        self.stack = []
-        sys.settrace(self.trace_cb)
-        sys.setprofile(self.profile_cb)
-        try:
-            exec(code, glob, loc)
-        finally:
-            sys.setprofile(None)
-            sys.settrace(None)
