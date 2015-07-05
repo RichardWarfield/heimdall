@@ -130,6 +130,46 @@ def insert_new_var_assign(new_expr, out_edges, out_scopes):
     out_scope.body.insert(insert_idx, newexpr_assign)
     return 'newvar'
 
+
+
+def assumption_guard_entry_exit(dfg, nodes):
+    """
+
+    Returns a tuple (scope, entry, exit).
+
+    entry is a tuple (filename, lineno) corresponding to the earliest node that would have
+    been executed in the statment sequence corresponding to this dfg.
+
+    exit a tuple (filename, lineno) corresponding to the LAST node *in the same scope
+    as entry_point* that would have been executed in the statment sequence corresponding
+    to this dfg.
+
+    We are going to put an If-Else around these endpoints, so they need to be in the same
+    scope *and* at the same indentation level.
+
+    """
+    indices = [n.stmt_idx for n in nodes]
+    entry_idx, exit_idx = min(indices), max(indices)
+
+    entry, exit = dfg.stmt_sequence[entry_idx], dfg.stmt_sequence[exit_idx]
+
+    # Is exit in the same scope as entry?  Otherwise we use the next line of the entry
+    # scope as the exit
+    entry_scope = dfg.line_scope(entry[0], entry[1])
+    exit_scope = dfg.line_scope(exit[0], exit[1])
+    if entry_scope != exit_scope:
+        exit = entry
+
+    entry_stmts = dfg.line_statements(entry[0], entry[1])
+    exit_stmts = dfg.line_statements(exit[0], exit[1])
+
+    if not list(entry_stmts)[0].parent == list(exit_stmts)[0]:
+
+
+    return entry_scope, line_to_body_idx(entry_scope, entry), line_to_body_idx(entry_scope, exit)
+
+
+
 def replace_subgraph_and_code(dfg, nodes_to_replace, edges_to_replace, out_edges, new_expr):
     """
     Replace a subgraph of the dfg with a graph generated from a new expression.
@@ -147,6 +187,14 @@ def replace_subgraph_and_code(dfg, nodes_to_replace, edges_to_replace, out_edges
     - Returning from a function TODO - THINK ABOUT THIS
 
     """
+
+    # TODO: Several things
+    # - assumption guards
+    # - DFG -- update or invalidate??
+
+    entry,exit,top_scope = assumption_guard_entry_exit(dfg, nodes_to_replace)
+    if_clause, else_clause = [], []
+
     out_scopes = [o.n1.ast_node.scope() for o in out_edges]
     # Goes before the first out edge
     new_var_name = insert_new_var_assign(new_expr, out_edges, out_scopes)

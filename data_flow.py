@@ -176,6 +176,9 @@ def analyze_flow(stmt_sequence):
     # parameters are bound) to where the parameter is used.
     assert len(call_stack) == 0
 
+    dfg.stmt_sequence = stmt_sequence
+    dfg.line_to_asts = line_to_asts
+
     return dfg
 
 def analyze_loop(st, stmt_sequence, cur_stmt):
@@ -516,6 +519,25 @@ class DataFlowGraph(object):
             else:
                 to_visit.update(self.get_outputs(cur))
         return res
+
+    def line_scope(self, filename, lineno):
+
+        try:
+            return self.line_asts(filename, lineno)[0].scope()
+        except KeyError:
+            raise KeyError("No AST on line in DataFlowDiagram: %s:%i" % (filename, lineno))
+
+    def line_asts(self, filename, lineno):
+        return self.line_to_asts[filename][lineno]
+
+    def line_statements(self, filename, lineno):
+        def get_statement(ast_node):
+            """ Traverse up the ast tree until we find a statement """
+            node = ast_node
+            while not node.is_statement:
+                node = node.parent
+            return node
+        return {get_statement(a) for a in self.line_asts(filename, lineno)}
 
 
     def draw_digraph(self, **kwargs):
