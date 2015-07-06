@@ -132,7 +132,7 @@ def insert_new_var_assign(new_expr, out_edges, out_scopes):
 
 
 
-def assumption_guard_entry_exit(dfg, nodes):
+def assumption_guard_entry_exit(dfg, nodes, assumption_expr):
     """
 
     Returns a tuple (scope, entry, exit).
@@ -160,8 +160,44 @@ def assumption_guard_entry_exit(dfg, nodes):
     if entry_scope != exit_scope:
         exit = entry
 
+    # OK... now this gets complicated.  In addition to being in the same scope the guards need
+    # to be at the same indentation level (i.e. enclosing statement).  The only way I can
+    # think to do this is to follow the statment flow and open a new If-Else every time
+    # the indentation changes in the right direction....
+    last_indent = None
+    guard_start = None
+    guards = []
+    for (i, (filename, lineno, _)) in enumerate(dfg.stmt_sequence):
+        indent = dfg.line_ident(filename, lineno)
+        if indent != last_indent:
+            # Close last guard (if applicable)
+            if last_indent is not None:
+                guards.append((guard_start, dfg.stmt_sequence[i-1][:2]))
+
+    # The rule: guard any scope we are changing EXCEPT don't guard before we start.
+    # For called (and traced) functions we can just replace the whole function.
+    # XXX Richard -- this is your newest work.
     entry_stmts = dfg.line_statements(entry[0], entry[1])
     exit_stmts = dfg.line_statements(exit[0], exit[1])
+
+    entry_parent = list(entry_stmts)[0].parent
+    exit_parent = list(exit_stmts)[0].parent
+
+    cur_idx = min([entry_parent.body.index(s) for s in entry_stmts])
+    cur = entry_parent.body[entry_start.lineno]
+    guards = []
+    # TODO  What if exit is not in the same or a parent block of entry??
+    while cur.parent != exit_parent:
+        # Add the rest of the block
+        guards.append((cur.parent, cur_idx, len(cur.parent.body)))
+        cur_idx = cur.parent.body.index(cur.parent)+1
+        cur = cur.parent.body[cur_idx]
+
+    last_idx = max([exit_parent.body.index(s) for s in exit_stmts])
+    guards.append((cur.parent, cur_idx, last_idx))
+
+
+
 
     if not list(entry_stmts)[0].parent == list(exit_stmts)[0]:
 

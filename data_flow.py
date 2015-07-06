@@ -539,6 +539,8 @@ class DataFlowGraph(object):
             return node
         return {get_statement(a) for a in self.line_asts(filename, lineno)}
 
+    def line_indent(self, filename, lineno):
+        return min([stmt.col_offset for stmt in self.line_statements(filename, lineno)])
 
     def draw_digraph(self, **kwargs):
         dfd = Digraph()
