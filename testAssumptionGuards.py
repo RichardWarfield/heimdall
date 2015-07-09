@@ -1,4 +1,5 @@
-
+from optimizer import guards_between
+import astroid
 
 def f1(a,b,c,d):
     rng = np.random.RandomState(55)
@@ -19,16 +20,6 @@ def f2(a,b,c,d):
     tmp1 = np.dot(j,k)
     y = h(tmp1,m)
     return y
-
-def h(a,b):
-    # End
-    return np.dot(a,b)
-
-def g2():
-    if True:
-        print "Hello"
-    else:
-        print "Impossible!"
 
 def f3(a,b,c,d):
     """ Challenge for placing guards: start and end in different indentation levels.
@@ -61,4 +52,13 @@ def f4(a,b,c,d):
         y = np.dot(tmp1,m)
     # End
     return y
+
+def test1():
+    ast = astroid.MANAGER.ast_from_file(__file__)
+    print __file__
+    print ast.body[2] # f1
+    guards = guards_between(ast.body[2], 0, 10)
+    assert len(guards)==1
+    fn, startidx, endidx = guards[0]
+    assert startidx == 0 and endidx==5
 

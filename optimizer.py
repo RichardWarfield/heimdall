@@ -131,6 +131,48 @@ def insert_new_var_assign(new_expr, out_edges, out_scopes):
     return 'newvar'
 
 
+def guards_between(start_block, start_idx, last_lineno):
+    """
+    Returns a list of tuples representing regions of the ast (block bodies)of the form:
+    (block, start_idx [inclusive], end_idx [exclusive])
+    """
+    block = start_block
+    stmt_idx = start_idx
+
+    guards = [] # list of (block, start_idx [inclusive], end_idx [exclusive])
+
+    # TODO  What if exit is not in the same or a parent block of entry??
+    while True:
+        # Add the rest of the block, or until we would pass the exit stmt...
+        for end_guard in range(stmt_idx, len(block.body)):
+            if block.body[end_guard].tolineno >= last_lineno:
+                break
+
+        if block.body[end_guard].lineno == last_lineno:
+            if stmt_idx != end_guard:
+                guards.append((block, stmt_idx, end_guard))
+            break # We are done!
+        # Did we get to the end of the block? Then go "down"
+        elif end_guard+1 == len(block.body):
+            if stmt_idx != end_guard+1:
+                guards.append((block, stmt_idx, end_guard+1))
+            stmt_idx = block.parent.body.index(block)+1
+            block = block.parent
+            print "Going down to block", block, stmt_idx
+        # Otherwise, the end is in a sub-block.  Go up
+        # XXX Note: we don't have to guard the test for an if/while/for. why not?
+        # Because the only way it can change sth is by calling a function, in which
+        # case we will add a function call flag.  I think.
+        else:
+            if stmt_idx != end_guard:
+                guards.append((block, stmt_idx, end_guard))
+            #import ipdb; ipdb.set_trace()
+            stmt_idx = 0
+            block = block.body[end_guard]
+            print "Going up to block ", block
+
+    return guards
+
 
 def assumption_guard_entry_exit(dfg, nodes, assumption_expr):
     """
@@ -184,14 +226,9 @@ def assumption_guard_entry_exit(dfg, nodes, assumption_expr):
     exit_parent = list(exit_stmts)[0].parent
 
     cur_idx = min([entry_parent.body.index(s) for s in entry_stmts])
-    cur = entry_parent.body[entry_start.lineno]
-    guards = []
-    # TODO  What if exit is not in the same or a parent block of entry??
-    while cur.parent != exit_parent:
-        # Add the rest of the block
-        guards.append((cur.parent, cur_idx, len(cur.parent.body)))
-        cur_idx = cur.parent.body.index(cur.parent)+1
-        cur = cur.parent.body[cur_idx]
+    guards = guards_between(entry_parent, cur_idx, exit[1])
+
+
 
     last_idx = max([exit_parent.body.index(s) for s in exit_stmts])
     guards.append((cur.parent, cur_idx, last_idx))
@@ -199,15 +236,17 @@ def assumption_guard_entry_exit(dfg, nodes, assumption_expr):
 
 
 
-    if not list(entry_stmts)[0].parent == list(exit_stmts)[0]:
-
-
     return entry_scope, line_to_body_idx(entry_scope, entry), line_to_body_idx(entry_scope, exit)
 
 
 
-def replace_subgraph_and_code(dfg, nodes_to_replace, edges_to_replace, out_edges, new_expr):
+def replace_subgraph_and_code(dfg, nodes_to_replace, edges_to_replace, out_edges, new_expr, assumptions):
     """
+
+    assumptions: a dict of pairs (dfg_node: expr) where expr is a string.  To test each assumption,
+        {1} will be replaced with the value of the corresponding dfg node's runtime output and the
+        resulting string will be evaluated.
+
     Replace a subgraph of the dfg with a graph generated from a new expression.
 
     The general strategy is:
@@ -222,18 +261,33 @@ def replace_subgraph_and_code(dfg, nodes_to_replace, edges_to_replace, out_edges
     - Assign or use var name
     - Returning from a function TODO - THINK ABOUT THIS
 
+
     """
 
     # TODO: Several things
     # - assumption guards
     # - DFG -- update or invalidate??
 
-    entry,exit,top_scope = assumption_guard_entry_exit(dfg, nodes_to_replace)
-    if_clause, else_clause = [], []
+
+    # Check assumptions at the first node/statement
+    node_stmt_indices = partition(nodes_to_replace, lambda n: n.stmt_idx)
+    first_stmt_idx = min(new_stmt_indices.keys())
+    first_stmt_nodes = new_stmt_indices[first_stmt_idx]
+    first_stmt = get_statement(first_stmt_nodes[0])
+    assumption_code = ' and '.join(['('+(expr % n.get_name())+')' for (n,expr) in assmuptions])
+    asmt_check_name = insert_new_var_assign(new_expr, out_edges, out_scopes)
+
+    for stmt_idx in sorted(node_stmt_indices.keys()):
+        # XXX I need to make sure that at the very first statement I can
+        # check whether all the assumptions are correct.
+        nodes = node_stmt_indices[stmt_idx]
+        stmt_ast = get_statement(nodes[0]) # XXX All the same statement?
 
     out_scopes = [o.n1.ast_node.scope() for o in out_edges]
+
     # Goes before the first out edge
     new_var_name = insert_new_var_assign(new_expr, out_edges, out_scopes)
+
 
     # Find all the scopes we need to change
     scopes = partition(nodes_to_replace, lambda n: n.ast_node.scope())
@@ -316,6 +370,7 @@ class Optimizer(object):
 
     def optimize_matrix_chain(self, func, dfg):
         """ Look for (effectively) nested calls to dot """
+        assumptions = {}
 
 
         done_chains = {}
@@ -356,7 +411,8 @@ class Optimizer(object):
 
 
         def optimize_chain_inner(dot_shapes):
-            #print "In optimize_chain_inner!  Looking to optimize these dot calls/shapes ", dot_shapes
+            print "In optimize_chain_inner!  Looking to optimize these dot calls/shapes ", dot_shapes
+
             dot_call_dfg_nodes = {dotcall_ni.dfg_node: shape for (dotcall_ni, shape) in dot_shapes.items()}
             for (dotcall_ni, shape) in dot_shapes.iteritems():
                 if len(shape) == 2:
@@ -364,18 +420,25 @@ class Optimizer(object):
             # Remove incomplete chains
             for d in subchains:
                 done_chains.pop(d, None)
+
             print "And here are the chains: ", done_chains
+            for (chain_final_node, sources) in do_shapes.iteritems():
 
             for (end, inputs) in done_chains.iteritems():
+                for (source, shape) in sources:
+                    assumptions[source] = "{1}.shape == %s" % str(shape)
+
                 chain_inputs = [inp for (inp,shp) in inputs]
                 chain_shapes = [shp for (inp,shp) in inputs]
                 optimal_order = matrix_chain.matrix_chain_tree(chain_shapes)
                 print "Optimal order", optimal_order
-                new_chain_expr = mult_order_to_expr(chain_inputs, optimal_order, end.ast_node.func.as_string())
+                new_chain_expr = mult_order_to_expr(chain_inputs, optimal_order,
+                        end.ast_node.func.as_string())
 
                 nodes_to_delete, edges_to_delete = dfg.subgraph_between(chain_inputs, end)
                 out_edges = dfg.get_outgoing_edges(end)
-                replace_subgraph_and_code(dfg, nodes_to_delete, edges_to_delete, out_edges, new_chain_expr)
+                replace_subgraph_and_code(dfg, nodes_to_delete, edges_to_delete, out_edges, new_chain_expr,
+                        assumptions)
                 print "func is", func
 
 
