@@ -19,6 +19,9 @@ THINGS I NEED TO THINK MORE CAREFULLY ABOUT:
     - What data, exactly, to save..?
 """
 
+def mainvar(name, val):
+    import __main__
+    __main__.__dict__[name] = val
 def label_linenos(node, work={}):
     lineno = node.lineno
     #if node.fromlineno == node.tolineno:
@@ -31,6 +34,46 @@ def label_linenos(node, work={}):
             label_linenos(child, work)
     return work
 
+
+def process_variable_dependency(dfg, stmt_sequence, st, var, stmt_idx, filename, lineno, filenames, line_to_asts):
+    """
+    Make the subgraph related to the use of var (an astroid.Name).
+    - Assign node and edge to here
+    - external calls
+    - expression composition
+    """
+
+    resolved_internally = False
+    asmts = get_enclosing_scope(st).lookup(var.name)[1]
+    for asmt in asmts:
+        # TODO: more than one assignment??
+        if type(asmt) in (astroid.Function, astroid.Import):
+            # We consider these to be resolved staticly, so won't matter for our
+            # runtime data flow.
+            continue
+        if asmt.root().file:
+            file = os.path.abspath(asmt.root().file)
+            if file in filenames and asmt.lineno in line_to_asts[file]:
+                dfg.add_assign_use_edge(stmt_idx, (file, asmt.lineno), (filename, lineno),
+                        asmt, var)
+                # Add all the parents of this node, up to the statement
+                pst = var
+                while not pst.parent.is_statement:
+                    func_call_parent = get_func_for_arg(pst)
+                    if (func_call_parent is not None
+                            and get_func_def(func_call_parent, filenames,st) is None):
+                        dfg.add_external_call(stmt_idx, (file, lineno), func_call_parent)
+                    else:
+                        dfg.add_composition_edge(stmt_idx, (file, lineno), pst, pst.parent)
+                    pst = pst.parent
+
+        # A var dependency is internal if it is assigned somewhere in our statement list,
+        # and if the assignment is in scope when we use the variable
+        if have_visited((file, asmt.lineno), stmt_sequence[:stmt_idx+1]):
+            resolved_internally = True
+
+    if not resolved_internally:
+        dfg.add_external_dep(var.name, stmt_idx, filename, lineno, var)
 
 def analyze_flow(stmt_sequence):
     """
@@ -57,6 +100,8 @@ def analyze_flow(stmt_sequence):
 
     """
 
+    stmt_sequence = [(os.path.abspath(f)[:-1] if f.endswith('pyc') else os.path.abspath(f), l, t)
+            for (f,l,t) in stmt_sequence]
 
     # Find all file names.  Yup, this is a set comprehension.
     filenames = {fn for (fn,_,__) in stmt_sequence}
@@ -118,39 +163,8 @@ def analyze_flow(stmt_sequence):
                         dfg.add_assign_edge(stmt_idx, (filename,lineno), target, st.value)
 
             for var in vardeps:
-                #
-                resolved_internally = False
-                asmts = get_enclosing_scope(st).lookup(var.name)[1]
-                for asmt in asmts:
-                    # TODO: more than one assignment??
-                    if type(asmt) in (astroid.Function, astroid.Import):
-                        # We consider these to be resolved staticly, so won't matter for our
-                        # runtime data flow.
-                        continue
-                    if asmt.root().file:
-                        file = asmt.root().file
-                        if (file in filenames and asmt.lineno in line_to_asts[file]):
-                            resolved = True
-                            dfg.add_assign_use_edge(stmt_idx, (file, asmt.lineno), (filename, lineno),
-                                    asmt, var)
-                            # Add all the parents of this node, up to the statement
-                            pst = var
-                            while not pst.parent.is_statement:
-                                func_call_parent = get_func_for_arg(pst)
-                                if (func_call_parent is not None and get_func_def(func_call_parent, filenames,st) is None):
-                                    dfg.add_external_call(stmt_idx, (file, lineno), func_call_parent)
-                                else:
-                                    dfg.add_composition_edge(stmt_idx, (file, lineno), pst, pst.parent)
-                                pst = pst.parent
-
-                    # A var dependency is internal if it is assigned somewhere in our statement list,
-                    # and if the assignment is in scope when we use the variable
-                    if have_visited((file, asmt.lineno), stmt_sequence[:stmt_idx+1]):
-                        resolved_internally = True
-
-                if not resolved_internally:
-                    dfg.add_external_dep(var.name, stmt_idx, filename, lineno, var)
-
+                process_variable_dependency(dfg, stmt_sequence, st, var, stmt_idx,
+                        filename, lineno, filenames, line_to_asts)
 
             # fncalls should be in precisely the order that we will call from here.
             for fcall in fncalls:
@@ -201,7 +215,7 @@ def get_func_def(func_call, filenames, ast_context):
     else:
         func_defs = ast_context.scope().lookup(func_call.func.as_string())[1]
     assert len(func_defs) <= 1
-    if len(func_defs) == 1 and func_defs[0].root().file in filenames:
+    if len(func_defs) == 1 and os.path.abspath(func_defs[0].root().file) in filenames:
         func_def = func_defs[0]
         return func_def
     else:
@@ -383,7 +397,7 @@ class DataFlowGraph(object):
 
 
     def add_return_edge(self, stmt_idx, returnfrom, returnto, ret_node, ret_to_node):
-        n1 = self.Node(stmt_idx, returnfrom[0], returnfrom[1], ret_node.value)
+        n1 = self.ExprNode(stmt_idx, returnfrom[0], returnfrom[1], ret_node.value)
         n2 = self.Node(None, returnto[0], returnto[1], ret_to_node)
         self.nodes.add(n1)
         self.nodes.add(n2)
@@ -415,7 +429,8 @@ class DataFlowGraph(object):
         while (len(self.get_inputs(cur)) == 1
             and cur == node or type(cur.ast_node) in (astroid.Name, astroid.AssName)):
             (cur,) = self.get_inputs(cur)
-        assert isinstance(cur, self.ExprNode)
+        mainvar('lastnode', cur)
+        assert isinstance(cur, DataFlowGraph.ExprNode), 'Node was %s %s: %s'%(str(type(cur)), str(cur), cur.ast_node.as_string())
         return cur
 
     def get_inputs(self, node):
@@ -542,7 +557,10 @@ class DataFlowGraph(object):
     def line_indent(self, filename, lineno):
         return min([stmt.col_offset for stmt in self.line_statements(filename, lineno)])
 
-    def draw_digraph(self, **kwargs):
+    def draw_digraph(self, colors={}, **kwargs):
+        """
+        colors is a dictionay mapping nodes to colors.
+        """
         dfd = Digraph()
         done = set()
         n_stmts = max([n.stmt_idx for n in self.nodes])+1
@@ -553,13 +571,14 @@ class DataFlowGraph(object):
             for n in self.nodes:
                 if n.stmt_idx == i:
                     subgraph.node(str(n), tooltip=str((n.__class__.__name__, n.stmt_idx,
-                        n.filename, n.lineno, n.ast_node.as_string())))
+                        n.filename, n.lineno, n.ast_node.as_string())), color=colors.get(n,'black'))
                     done.add(n)
             dfd.subgraph(subgraph)
 
         # Get the nodes that don't have a stmt_idx
         for n in (self.nodes - done):
-            dfd.node(str(n), tooltip=str((n.stmt_idx, n.filename, n.lineno, n.ast_node.as_string())))
+            dfd.node(str(n), tooltip=str((n.stmt_idx, n.filename, n.lineno, n.ast_node.as_string())),
+                    color=colors.get(n, 'black'))
 
         for e in self.edges:
             assert e.n1 in self.nodes

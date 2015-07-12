@@ -3,7 +3,7 @@ import numpy as np
 import __main__
 import time
 import cpu_tools
-import pdb, ipdb
+import pdb
 import inspect
 import networkx as nx
 from networkx import DiGraph
@@ -19,20 +19,22 @@ import logging
 logger = logging.getLogger(__name__)
 
 class Heimdall(object):
-    def __init__(self):
+    def __init__(self, max_nesting=2, prof_shot_time=4):
         self.done = False
         self.optimizer = optimizer.Optimizer()
         self.watcher = watcher.FunctionWatcher()
+        self.max_nesting = max_nesting
+        self.prof_shot_time = prof_shot_time
 
     def run(self, code, glob, loc):
-        self.profiler = Profiling(callback=self.p_callback, prof_shot_time=2)
+        self.profiler = Profiling(callback=self.p_callback, prof_shot_time=self.prof_shot_time)
         self.profiler.run(code, glob, loc)
 
 
     def p_callback(self, stattree):
         print "Got p_callback"
-        target_func = self.optimizer.choose_function_to_optimize(stattree)
-        target = os.path.abspath(target_func.filename), target_func.name
+        target_func = self.optimizer.choose_function_to_optimize(stattree, self.max_nesting)
+        target = os.path.abspath(os.path.join(target_func.directory, target_func.filename)), target_func.name
         print "Going to watch for %s" % str(target)
 
         self.watcher.watch_next_invocation(target, self.watcher_callback)
@@ -210,7 +212,7 @@ def g(n):
     for i in range(n):
         e = 2500
         t = time.time()
-        x = f(1500, e, 4000, 1000)
+        x = f(1500, e, 3000, 1000)
         print "g iter %i Took %f seconds, sum is %f" %(i, time.time() - t, x.sum())
     print x.shape
 

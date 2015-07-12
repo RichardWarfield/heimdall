@@ -1,18 +1,95 @@
 digraph {
-		"('assign', ('heimdall.py', 201))" -> "('use', ('heimdall.py', 208))"
-		"('callfunc', ('heimdall.py', 202))" -> "('function', ('heimdall.py', 202))"
-		"('assign', ('heimdall.py', 202))" -> "('use', ('heimdall.py', 204))"
-		"('assign', ('heimdall.py', 207))" -> "('use', ('heimdall.py', 208))"
-		"('assign', ('heimdall.py', 198))" -> "('use', ('heimdall.py', 204))"
-		"('assign', ('heimdall.py', 201))" -> "('use', ('heimdall.py', 203))"
-		"('assign', ('heimdall.py', 198))" -> "('use', ('heimdall.py', 202))"
-		"('assign', ('heimdall.py', 198))" -> "('use', ('heimdall.py', 203))"
-		"('assign', ('heimdall.py', 201))" -> "('use', ('heimdall.py', 202))"
-		"('callfunc', ('heimdall.py', 204))" -> "('function', ('heimdall.py', 204))"
-		"('assign', ('heimdall.py', 201))" -> "('use', ('heimdall.py', 203))"
-		"('assign', ('heimdall.py', 201))" -> "('use', ('heimdall.py', 202))"
-		"('callfunc', ('heimdall.py', 206))" -> "('function', ('heimdall.py', 206))"
-		"('callfunc', ('heimdall.py', 203))" -> "('function', ('heimdall.py', 203))"
-		"('assign', ('heimdall.py', 203))" -> "('use', ('heimdall.py', 204))"
-		"('callfunc', ('heimdall.py', 208))" -> "('function', ('heimdall.py', 208))"
+	subgraph cluster_0 {
+		graph [label="stmt 0"]
+			"testAssumptionGuards.py 5(Call np.random.RandomState())" [color=black tooltip="('ExprNode', 0, '/home/richard/workspace/heimdall/testAssumptionGuards.py', 5, 'np.random.RandomState(55)')"]
+			"testAssumptionGuards.py 5(AssName(rng))" [color=black tooltip="('VarAssignNode', 0, '/home/richard/workspace/heimdall/testAssumptionGuards.py', 5, 'rng')"]
+	}
+	subgraph cluster_1 {
+		graph [label="stmt 1"]
+			"testAssumptionGuards.py 6(Name(a))" [color=black tooltip="('ExprNode', 1, '/home/richard/workspace/heimdall/testAssumptionGuards.py', 6, 'a')"]
+			"testAssumptionGuards.py 6(Getattr(uniform))" [color=black tooltip="('ExprNode', 1, '/home/richard/workspace/heimdall/testAssumptionGuards.py', 6, 'rng.uniform')"]
+			"testAssumptionGuards.py 6(Name(b))" [color=black tooltip="('ExprNode', 1, '/home/richard/workspace/heimdall/testAssumptionGuards.py', 6, 'b')"]
+			"testAssumptionGuards.py 6(Call rng.uniform())" [color=black tooltip="('ExprNode', 1, '/home/richard/workspace/heimdall/testAssumptionGuards.py', 6, 'rng.uniform(size=(a, b))')"]
+			"testAssumptionGuards.py 6(Tuple(tuple))" [color=black tooltip="('ExprNode', 1, '/home/richard/workspace/heimdall/testAssumptionGuards.py', 6, '(a, b)')"]
+			"testAssumptionGuards.py 6(Name(rng))" [color=black tooltip="('ExprNode', 1, '/home/richard/workspace/heimdall/testAssumptionGuards.py', 6, 'rng')"]
+			"testAssumptionGuards.py 6(AssName(j))" [color=red tooltip="('VarAssignNode', 1, '/home/richard/workspace/heimdall/testAssumptionGuards.py', 6, 'j')"]
+	}
+	subgraph cluster_2 {
+		graph [label="stmt 2"]
+			"testAssumptionGuards.py 7(Name(b))" [color=black tooltip="('ExprNode', 2, '/home/richard/workspace/heimdall/testAssumptionGuards.py', 7, 'b')"]
+			"testAssumptionGuards.py 7(AssName(k))" [color=red tooltip="('VarAssignNode', 2, '/home/richard/workspace/heimdall/testAssumptionGuards.py', 7, 'k')"]
+			"testAssumptionGuards.py 7(Call rng.uniform())" [color=black tooltip="('ExprNode', 2, '/home/richard/workspace/heimdall/testAssumptionGuards.py', 7, 'rng.uniform(size=(b, c))')"]
+			"testAssumptionGuards.py 7(Name(rng))" [color=black tooltip="('ExprNode', 2, '/home/richard/workspace/heimdall/testAssumptionGuards.py', 7, 'rng')"]
+			"testAssumptionGuards.py 7(Getattr(uniform))" [color=black tooltip="('ExprNode', 2, '/home/richard/workspace/heimdall/testAssumptionGuards.py', 7, 'rng.uniform')"]
+			"testAssumptionGuards.py 7(Name(c))" [color=black tooltip="('ExprNode', 2, '/home/richard/workspace/heimdall/testAssumptionGuards.py', 7, 'c')"]
+			"testAssumptionGuards.py 7(Tuple(tuple))" [color=black tooltip="('ExprNode', 2, '/home/richard/workspace/heimdall/testAssumptionGuards.py', 7, '(b, c)')"]
+	}
+	subgraph cluster_3 {
+		graph [label="stmt 3"]
+			"testAssumptionGuards.py 8(Name(c))" [color=black tooltip="('ExprNode', 3, '/home/richard/workspace/heimdall/testAssumptionGuards.py', 8, 'c')"]
+			"testAssumptionGuards.py 8(AssName(m))" [color=red tooltip="('VarAssignNode', 3, '/home/richard/workspace/heimdall/testAssumptionGuards.py', 8, 'm')"]
+			"testAssumptionGuards.py 8(Call rng.uniform())" [color=black tooltip="('ExprNode', 3, '/home/richard/workspace/heimdall/testAssumptionGuards.py', 8, 'rng.uniform(size=(c, d))')"]
+			"testAssumptionGuards.py 8(Getattr(uniform))" [color=black tooltip="('ExprNode', 3, '/home/richard/workspace/heimdall/testAssumptionGuards.py', 8, 'rng.uniform')"]
+			"testAssumptionGuards.py 8(Name(d))" [color=black tooltip="('ExprNode', 3, '/home/richard/workspace/heimdall/testAssumptionGuards.py', 8, 'd')"]
+			"testAssumptionGuards.py 8(Name(rng))" [color=black tooltip="('ExprNode', 3, '/home/richard/workspace/heimdall/testAssumptionGuards.py', 8, 'rng')"]
+			"testAssumptionGuards.py 8(Tuple(tuple))" [color=black tooltip="('ExprNode', 3, '/home/richard/workspace/heimdall/testAssumptionGuards.py', 8, '(c, d)')"]
+	}
+	subgraph cluster_4 {
+		graph [label="stmt 4"]
+			"testAssumptionGuards.py 9(AssName(tmp1))" [color=red tooltip="('VarAssignNode', 4, '/home/richard/workspace/heimdall/testAssumptionGuards.py', 9, 'tmp1')"]
+			"testAssumptionGuards.py 9(Name(k))" [color=red tooltip="('ExprNode', 4, '/home/richard/workspace/heimdall/testAssumptionGuards.py', 9, 'k')"]
+			"testAssumptionGuards.py 9(Name(j))" [color=red tooltip="('ExprNode', 4, '/home/richard/workspace/heimdall/testAssumptionGuards.py', 9, 'j')"]
+			"testAssumptionGuards.py 9(Call np.dot())" [color=red tooltip="('ExprNode', 4, '/home/richard/workspace/heimdall/testAssumptionGuards.py', 9, 'np.dot(j, k)')"]
+	}
+	subgraph cluster_5 {
+		graph [label="stmt 5"]
+			"testAssumptionGuards.py 10(Call np.dot())" [color=red tooltip="('ExprNode', 5, '/home/richard/workspace/heimdall/testAssumptionGuards.py', 10, 'np.dot(tmp1, m)')"]
+			"testAssumptionGuards.py 10(Name(m))" [color=red tooltip="('ExprNode', 5, '/home/richard/workspace/heimdall/testAssumptionGuards.py', 10, 'm')"]
+			"testAssumptionGuards.py 10(Name(tmp1))" [color=red tooltip="('ExprNode', 5, '/home/richard/workspace/heimdall/testAssumptionGuards.py', 10, 'tmp1')"]
+			"testAssumptionGuards.py 10(AssName(y))" [color=black tooltip="('VarAssignNode', 5, '/home/richard/workspace/heimdall/testAssumptionGuards.py', 10, 'y')"]
+	}
+	subgraph cluster_6 {
+		graph [label="stmt 6"]
+			"testAssumptionGuards.py 11(Name(y))" [color=black tooltip="('ExprNode', 6, '/home/richard/workspace/heimdall/testAssumptionGuards.py', 11, 'y')"]
+	}
+	"testAssumptionGuards.py 4(AssName(d))" [color=black tooltip="(None, '/home/richard/workspace/heimdall/testAssumptionGuards.py', 4, 'd')"]
+	"testAssumptionGuards.py 4(AssName(b))" [color=black tooltip="(None, '/home/richard/workspace/heimdall/testAssumptionGuards.py', 4, 'b')"]
+	"testAssumptionGuards.py 4(AssName(c))" [color=black tooltip="(None, '/home/richard/workspace/heimdall/testAssumptionGuards.py', 4, 'c')"]
+	"testAssumptionGuards.py 4(AssName(a))" [color=black tooltip="(None, '/home/richard/workspace/heimdall/testAssumptionGuards.py', 4, 'a')"]
+		"testAssumptionGuards.py 7(Name(rng))" -> "testAssumptionGuards.py 7(Getattr(uniform))" [label="(comp)"]
+		"testAssumptionGuards.py 8(Name(d))" -> "testAssumptionGuards.py 8(Tuple(tuple))" [label="(comp)"]
+		"testAssumptionGuards.py 9(Name(k))" -> "testAssumptionGuards.py 9(Call np.dot())" [label=1]
+		"testAssumptionGuards.py 4(AssName(d))" -> "testAssumptionGuards.py 8(Name(d))" [label=d]
+		"testAssumptionGuards.py 6(Tuple(tuple))" -> "testAssumptionGuards.py 6(Call rng.uniform())" [label=size]
+		"testAssumptionGuards.py 7(AssName(k))" -> "testAssumptionGuards.py 9(Name(k))" [label=k]
+		"testAssumptionGuards.py 4(AssName(c))" -> "testAssumptionGuards.py 7(Name(c))" [label=c]
+		"testAssumptionGuards.py 7(Call rng.uniform())" -> "testAssumptionGuards.py 7(AssName(k))" [label=k]
+		"testAssumptionGuards.py 7(Name(c))" -> "testAssumptionGuards.py 7(Tuple(tuple))" [label="(comp)"]
+		"testAssumptionGuards.py 9(Call np.dot())" -> "testAssumptionGuards.py 9(AssName(tmp1))" [label=tmp1]
+		"testAssumptionGuards.py 8(Call rng.uniform())" -> "testAssumptionGuards.py 8(AssName(m))" [label=m]
+		"testAssumptionGuards.py 6(Call rng.uniform())" -> "testAssumptionGuards.py 6(AssName(j))" [label=j]
+		"testAssumptionGuards.py 5(AssName(rng))" -> "testAssumptionGuards.py 7(Name(rng))" [label=rng]
+		"testAssumptionGuards.py 5(AssName(rng))" -> "testAssumptionGuards.py 8(Name(rng))" [label=rng]
+		"testAssumptionGuards.py 6(AssName(j))" -> "testAssumptionGuards.py 9(Name(j))" [label=j]
+		"testAssumptionGuards.py 10(Name(tmp1))" -> "testAssumptionGuards.py 10(Call np.dot())" [label=0]
+		"testAssumptionGuards.py 6(Name(a))" -> "testAssumptionGuards.py 6(Tuple(tuple))" [label="(comp)"]
+		"testAssumptionGuards.py 10(AssName(y))" -> "testAssumptionGuards.py 11(Name(y))" [label=y]
+		"testAssumptionGuards.py 10(Name(m))" -> "testAssumptionGuards.py 10(Call np.dot())" [label=1]
+		"testAssumptionGuards.py 4(AssName(b))" -> "testAssumptionGuards.py 6(Name(b))" [label=b]
+		"testAssumptionGuards.py 7(Name(b))" -> "testAssumptionGuards.py 7(Tuple(tuple))" [label="(comp)"]
+		"testAssumptionGuards.py 8(Name(rng))" -> "testAssumptionGuards.py 8(Getattr(uniform))" [label="(comp)"]
+		"testAssumptionGuards.py 6(Name(b))" -> "testAssumptionGuards.py 6(Tuple(tuple))" [label="(comp)"]
+		"testAssumptionGuards.py 4(AssName(b))" -> "testAssumptionGuards.py 7(Name(b))" [label=b]
+		"testAssumptionGuards.py 8(Tuple(tuple))" -> "testAssumptionGuards.py 8(Call rng.uniform())" [label=size]
+		"testAssumptionGuards.py 8(AssName(m))" -> "testAssumptionGuards.py 10(Name(m))" [label=m]
+		"testAssumptionGuards.py 4(AssName(c))" -> "testAssumptionGuards.py 8(Name(c))" [label=c]
+		"testAssumptionGuards.py 5(AssName(rng))" -> "testAssumptionGuards.py 6(Name(rng))" [label=rng]
+		"testAssumptionGuards.py 5(Call np.random.RandomState())" -> "testAssumptionGuards.py 5(AssName(rng))" [label=rng]
+		"testAssumptionGuards.py 7(Tuple(tuple))" -> "testAssumptionGuards.py 7(Call rng.uniform())" [label=size]
+		"testAssumptionGuards.py 8(Name(c))" -> "testAssumptionGuards.py 8(Tuple(tuple))" [label="(comp)"]
+		"testAssumptionGuards.py 4(AssName(a))" -> "testAssumptionGuards.py 6(Name(a))" [label=a]
+		"testAssumptionGuards.py 6(Name(rng))" -> "testAssumptionGuards.py 6(Getattr(uniform))" [label="(comp)"]
+		"testAssumptionGuards.py 10(Call np.dot())" -> "testAssumptionGuards.py 10(AssName(y))" [label=y]
+		"testAssumptionGuards.py 9(Name(j))" -> "testAssumptionGuards.py 9(Call np.dot())" [label=0]
+		"testAssumptionGuards.py 9(AssName(tmp1))" -> "testAssumptionGuards.py 10(Name(tmp1))" [label=tmp1]
 }

@@ -1,0 +1,4 @@
+[gui_scripts]
+runsnake = runsnakerun.runsnake:main
+runsnakemem = runsnakerun.runsnake:meliaemain
+

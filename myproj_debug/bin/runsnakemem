@@ -1,0 +1,10 @@
+#!/home/richard/workspace/heimdall/myproj_debug/bin/python
+# EASY-INSTALL-ENTRY-SCRIPT: 'RunSnakeRun==2.0.4','gui_scripts','runsnakemem'
+__requires__ = 'RunSnakeRun==2.0.4'
+import sys
+from pkg_resources import load_entry_point
+
+if __name__ == '__main__':
+    sys.exit(
+        load_entry_point('RunSnakeRun==2.0.4', 'gui_scripts', 'runsnakemem')()
+    )

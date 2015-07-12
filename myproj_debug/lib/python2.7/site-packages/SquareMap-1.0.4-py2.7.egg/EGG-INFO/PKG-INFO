@@ -1,0 +1,22 @@
+Metadata-Version: 1.1
+Name: SquareMap
+Version: 1.0.4
+Summary: Hierarchic data-visualisation control for wxPython
+Home-page: https://launchpad.net/squaremap
+Author: Mike C. Fletcher
+Author-email: mcfletch@vrplumber.com
+License: BSD
+Description: Hierarchic visualization control for wxPython 
+        
+        Hierarchic data visualization control intended for use with 
+        structures where "parents" hold collections of weighted children.
+        
+        Can be used for viewing sizes of directories on file-systems,
+        running-time of functions in profiling, or time spent on tasks 
+        in a time-tracking application.
+Keywords: wxPython,squaremap
+Platform: Any
+Classifier: License :: OSI Approved :: BSD License
+Classifier: Programming Language :: Python
+Classifier: Topic :: Software Development :: Libraries :: Python Modules
+Classifier: Intended Audience :: Developers

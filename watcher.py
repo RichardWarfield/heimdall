@@ -2,7 +2,7 @@ import sys
 import __main__
 import time
 import cpu_tools
-import pdb, ipdb
+import pdb
 import os.path
 import copy
 from aplus import Promise

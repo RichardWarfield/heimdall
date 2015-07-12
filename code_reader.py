@@ -1,7 +1,5 @@
 
 import dis
-from byteplay import Code
-#from byteplay.Opcode import *
 from networkx import DiGraph
 import struct
 import inspect
@@ -70,7 +68,6 @@ class VariableExtractor(astroid.utils.ASTWalker):
     def reset(self):
         self.varnames.clear()
         self.assigned.clear()
-        self.possible_impure_funcs.clear()
 
 
     def visit_name(self, node):
@@ -114,6 +111,9 @@ class VariableExtractor(astroid.utils.ASTWalker):
         self.visit(node.value)
         self.visit(node.slice)
 
+    def set_context(self, node, child_node):
+        # ???
+        pass
 
 def is_pure_func(f):
     """

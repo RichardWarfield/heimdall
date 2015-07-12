@@ -1,10 +1,12 @@
-import data_flow
 import numpy as np
+import numbers
 import sys, os
+import copy
 from numbers import Number
 import astroid
 import watcher
 from watcher import NeededInfo
+import data_flow
 import matrix_chain
 
 import logging
@@ -131,6 +133,69 @@ def insert_new_var_assign(new_expr, out_edges, out_scopes):
     return 'newvar'
 
 
+def make_assign_stmt(varname, expr, block):#, before_stmt):
+    """
+    Create a new Assign object and insert it into the ast.
+
+    before_stmt: if a number, insert before that position in the body of block.
+        otherwise, if a statement, insert before that statement. Otherwise,
+        if None, insert at the end of the block.
+    """
+    newexpr_assign = builder.string_build(varname +' = '+expr).body[0]
+    newexpr_assign.parent = block
+
+    #if before_stmt is None:
+    #    insert_idx = len(block.body)
+    #elif isinstance(before_stmt, numbers.Number):
+    #    insert_idx = before_stmt
+    #else:
+    #    insert_idx = block.body.index(before_stmt)
+
+    #block.body.insert(insert_idx, newexpr_assign)
+
+    return newexpr_assign
+
+def make_unary_op(op, operand, parent):
+    o = astroid.UnaryOp()
+    o.op = 'not'
+    o.operand = operand
+    o.parent = parent
+    return o
+
+
+def insert_guards(varname, block, start, end, newstmts=None):
+    """
+    if newstmts is none: replaces statements block.body[start:end] with an if
+        statement: if(not varname): (original code)
+    if newstments is not None it should be a list of astroid statements and
+        the new code is if(varname): (newstmts) else: (original code)
+    """
+    print "insert_guard called with ", varname, block, start, end, newstmts
+    ifo = astroid.If()
+    newvar = astroid.Name()
+    newvar.name = varname
+    if newstmts is None:
+        noto = make_unary_op('not', newvar, ifo)
+        newvar.parent = noto
+        ifo.test = noto
+        ifo.body = block.body[start:end]
+    else:
+        ifo.test = newvar
+        ifo.body = newstmts
+        ifo.orelse = block.body[start:end]
+
+    print "*** Removing statements:"
+    for s in block.body[start:end]:
+        print s.as_string()
+    print '*** Replacing with'
+    print ifo.as_string()
+    print '***'
+
+
+    del block.body[start:end]
+    block.body.insert(start, ifo)
+
+
 def guards_between(start_block, start_idx, last_lineno):
     """
     Returns a list of tuples representing regions of the ast (block bodies)of the form:
@@ -239,8 +304,60 @@ def assumption_guard_entry_exit(dfg, nodes, assumption_expr):
     return entry_scope, line_to_body_idx(entry_scope, entry), line_to_body_idx(entry_scope, exit)
 
 
+def get_node_varname(dfg, node):
+    """
+    Get the var name assigned to the given expression node in this scope.  If there isn't one then
+    create a new assignment and replace the node with the name.
+    """
+    for nextnode in dfg.get_outputs(node):
+        if isinstance(nextnode, data_flow.DataFlowGraph.VarAssignNode):
+            return nextnode.ast_node.name
+    assert False, "Not implementing: create name for unnamed expression"
 
-def replace_subgraph_and_code(dfg, nodes_to_replace, edges_to_replace, out_edges, new_expr, assumptions):
+counter = 0
+def unique_var(s):
+    global counter
+    counter += 1
+    return s+str(counter)
+
+def make_modcode_preface(nodes_to_replace, in_edges, assumptions):
+    """ Creates the code (AST statements) to calculate the variables related to the in edges
+    and their assumptions. """
+    pre_nodes = {e.n1 for e in in_edges}
+    for n in assumptions:
+        assert n in pre_nodes, "Assumptions must relate to nodes coming via in_edges:%s"%str(n)
+
+    source_names = {}
+    stmts = []
+    # If we rely on an existing assignment, we need the assumption line to be after that
+    last_needed_assign = 0
+    for e in in_edges:
+        # Does this edge already correspond to a variable name?  If so just keep using that.
+        if type(e) == data_flow.DataFlowGraph.AssignEdge:
+            name = e.n2.ast_node.name
+            last_needed_assign = max(last_needed_assign, e.n2.stmt_idx)
+        elif type(e) == data_flow.DataFlowGraph.AssignUseEdge:
+            name = e.n1.ast_node.name
+        else:
+            # Need to assign a name.
+            name = unique_var('inp')
+            assignment = make_assign_stmt(name, e.n1.ast_node.as_string(),
+                    e.n1.ast_node.parent)
+            stmts.append(assignment)
+        source_names[e.n1] = name
+
+    ass_ok_varname = unique_var('ass_ok')
+    node_stmt_indices = partition(nodes_to_replace, lambda n: n.stmt_idx)
+    first_stmt_idx = max(last_needed_assign+1, min(node_stmt_indices.keys()))
+    first_stmt_nodes = node_stmt_indices[first_stmt_idx]
+    first_stmt = get_statement(first_stmt_nodes[0].ast_node)
+    print "Assumptions: ", assumptions
+    assumption_code = ' and '.join(['('+expr.replace('{1}', source_names[n])+')'
+        for (n,expr) in assumptions.iteritems()])
+    stmts.append(make_assign_stmt(ass_ok_varname, assumption_code, first_stmt.parent))
+    return stmts, first_stmt, source_names, ass_ok_varname
+
+def replace_subgraph_and_code(dfg, nodes_to_replace, edges_to_replace, in_edges, out_edges, new_expr, assumptions):
     """
 
     assumptions: a dict of pairs (dfg_node: expr) where expr is a string.  To test each assumption,
@@ -254,6 +371,7 @@ def replace_subgraph_and_code(dfg, nodes_to_replace, edges_to_replace, out_edges
     2. Insert the statement into the scope of the out_edges (must all be the same) before the
        first out edge.
     3. Find out which scopes are involved (contain the nodes to replace) and need to be modified
+    ...
 
     Each dfg EDGE represents:
     - Composition in an expression (the whole statement must be deleted)
@@ -261,6 +379,9 @@ def replace_subgraph_and_code(dfg, nodes_to_replace, edges_to_replace, out_edges
     - Assign or use var name
     - Returning from a function TODO - THINK ABOUT THIS
 
+    Constraints for changing code:
+    - Values referenced in assumptions must be available at the start of the computation
+        -- i.e. assumption nodes need to have names assigned at the beginning
 
     """
 
@@ -268,52 +389,80 @@ def replace_subgraph_and_code(dfg, nodes_to_replace, edges_to_replace, out_edges
     # - assumption guards
     # - DFG -- update or invalidate??
 
+    print "in_edges", [(e.n1, e.n2) for e in in_edges]
+    print "assumptions", assumptions
 
-    # Check assumptions at the first node/statement
-    node_stmt_indices = partition(nodes_to_replace, lambda n: n.stmt_idx)
-    first_stmt_idx = min(new_stmt_indices.keys())
-    first_stmt_nodes = new_stmt_indices[first_stmt_idx]
-    first_stmt = get_statement(first_stmt_nodes[0])
-    assumption_code = ' and '.join(['('+(expr % n.get_name())+')' for (n,expr) in assmuptions])
-    asmt_check_name = insert_new_var_assign(new_expr, out_edges, out_scopes)
+    # Make the preface, which will ensure the input data is named and will set the variable
+    # corresponding to whether or not the assumptions are satisfied.
+    preface_stmts, insert_before, source_names, ass_ok_var = make_modcode_preface(nodes_to_replace,
+            in_edges, assumptions)
+    block = insert_before.parent
+    insert_where = block.body.index(insert_before)
+    block.body[insert_where:insert_where] = preface_stmts
 
-    for stmt_idx in sorted(node_stmt_indices.keys()):
-        # XXX I need to make sure that at the very first statement I can
-        # check whether all the assumptions are correct.
-        nodes = node_stmt_indices[stmt_idx]
-        stmt_ast = get_statement(nodes[0]) # XXX All the same statement?
 
     out_scopes = [o.n1.ast_node.scope() for o in out_edges]
-
-    # Goes before the first out edge
-    new_var_name = insert_new_var_assign(new_expr, out_edges, out_scopes)
+    in_nodes = {e.n2 for e in in_edges}
+    print "in_nodes", in_nodes
+    out_nodes = {e.n1 for e in out_edges}
 
 
     # Find all the scopes we need to change
-    scopes = partition(nodes_to_replace, lambda n: n.ast_node.scope())
+    statement_nodes = partition(nodes_to_replace, lambda n: get_statement(n.ast_node))
+    print "statement_nodes", statement_nodes
+    block_nodes = partition(nodes_to_replace, lambda n: get_statement(n.ast_node).parent)
 
     # Delete every statement involved in nodes_to_replace unless there is an out_edge
     # from there (in which case we need to modify the statement to use the new variable)
-    for scope, nodes in scopes.iteritems():
-        statements = partition(nodes, lambda n: get_statement(n.ast_node))
-        # Find the statement
-        for stmt in statements:
+    for block, nodes in block_nodes.iteritems():
+        stmts_to_delete = [False] * len(block.body)
+        for (i,stmt) in enumerate(block.body):
+            if (stmt in statement_nodes
+                    and not any([nd in out_nodes for nd in statement_nodes[stmt]])
+                    and not any([nd in in_nodes for nd in statement_nodes[stmt]])):
+                # XXX We should be able to delete the whole statement provided there isn't an
+                # out edge from here (?)
+                stmts_to_delete[i] = True
 
-            # XXX We should be able to delete the whole statement provided there isn't an
-            # out edge from here (?)
-            out_nodes = [e.n1 for e in out_edges]
-            if not any([n in out_nodes for n in statements[stmt]]):
-                body_loc = stmt.parent.body.index(stmt)
-                #print "Deleting", stmt.parent.body[body_loc].as_string()
-                del stmt.parent.body[body_loc]
+        print "For block", block, "stmts_to_delete is ", stmts_to_delete
+        win_start, win_end = 0,1
+
+        # TODO: Deal with block statements (If, While, For...)
+        # TODO What if we visit the same line twice?
+        for i in xrange(1,  len(stmts_to_delete)):
+            if stmts_to_delete[i]:
+                if not stmts_to_delete[i-1]:
+                    win_start = i
+                    win_end = i+1
+                else:
+                    win_end += 1
+            else:
+                if stmts_to_delete[win_start]: # may be false at start of block
+                    insert_guards(ass_ok_var, block, win_start, win_end)
+                win_start = win_end = i
+
 
     # Finally -- replace the source of the out edges with the new variable
     for e in out_edges:
         #print "out edge", e, e.n1, e.n2
-        newvar = astroid.Name()
-        newvar.name = new_var_name
+        #newvar = astroid.Name()
+        #newvar.name = new_var_name
         #print "Replacing outgoing edge source with ", newvar
-        replace_child(e.n1.ast_node.parent, e.n1.ast_node, newvar)
+
+        # A little bit of dancing here.  It's easier to change the original node than
+        # in the copy... so we change the original then replace the original with the copy,
+        # then use the original as the newstmts in insert_guards
+        stmt_orig = get_statement(e.n1.ast_node)
+        stmt_copy = builder.string_build(stmt_orig.as_string()).body[0]
+        stmt_loc = stmt_orig.parent.body.index(stmt_orig)
+        newexpr_assign = builder.string_build(new_expr).body[0].value
+        print "Replace", e.n1.ast_node.parent, e.n1.ast_node, newexpr_assign
+        replace_child(e.n1.ast_node.parent, e.n1.ast_node, newexpr_assign)
+        stmt_orig.parent.body[stmt_loc] = stmt_copy
+        # Goes before the first out edge
+
+        insert_guards(ass_ok_var, stmt_orig.parent, stmt_loc, stmt_loc+1,
+                [stmt_orig])
 
     out_scopes[0].body.insert(0, builder.string_build("print 'In the new function!'").body[0])
     print "Changed scope ", out_scopes[0], ":"
@@ -354,7 +503,7 @@ class Optimizer(object):
 
         #XXX Debug code
         #self.candidates = candidates
-        #print "Optimize candidates", candidates
+        print "Optimize candidates", candidates
 
         return longest
 
@@ -422,10 +571,9 @@ class Optimizer(object):
                 done_chains.pop(d, None)
 
             print "And here are the chains: ", done_chains
-            for (chain_final_node, sources) in do_shapes.iteritems():
 
             for (end, inputs) in done_chains.iteritems():
-                for (source, shape) in sources:
+                for (source, shape) in inputs:
                     assumptions[source] = "{1}.shape == %s" % str(shape)
 
                 chain_inputs = [inp for (inp,shp) in inputs]
@@ -435,9 +583,11 @@ class Optimizer(object):
                 new_chain_expr = mult_order_to_expr(chain_inputs, optimal_order,
                         end.ast_node.func.as_string())
 
-                nodes_to_delete, edges_to_delete = dfg.subgraph_between(chain_inputs, end)
+                nodes_to_replace, edges_to_replace = dfg.subgraph_between(chain_inputs, end)
+                in_edges = {e for e in dfg.edges if e.n2 in nodes_to_replace
+                        and e.n1 not in nodes_to_replace}
                 out_edges = dfg.get_outgoing_edges(end)
-                replace_subgraph_and_code(dfg, nodes_to_delete, edges_to_delete, out_edges, new_chain_expr,
+                replace_subgraph_and_code(dfg, nodes_to_replace, edges_to_replace, in_edges, out_edges, new_chain_expr,
                         assumptions)
                 print "func is", func
 

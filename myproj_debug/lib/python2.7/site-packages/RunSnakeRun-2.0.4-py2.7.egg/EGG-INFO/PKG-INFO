@@ -1,0 +1,19 @@
+Metadata-Version: 1.1
+Name: RunSnakeRun
+Version: 2.0.4
+Summary: GUI Viewer for Python profiling runs
+Home-page: http://www.vrplumber.com/programming/runsnakerun/
+Author: Mike C. Fletcher
+Author-email: mcfletch@vrplumber.com
+License: BSD
+Download-URL: http://www.vrplumber.com/programming/runsnakerun/
+Description: GUI Viewer for Python profiling runs
+        
+        Provides explorability and overall visualization of the call tree
+        and package/module structures.
+Keywords: profile,gui,wxPython,squaremap
+Platform: Any
+Classifier: License :: OSI Approved :: BSD License
+Classifier: Programming Language :: Python
+Classifier: Topic :: Software Development :: Libraries :: Python Modules
+Classifier: Intended Audience :: Developers

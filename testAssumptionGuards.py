@@ -1,5 +1,5 @@
 from optimizer import guards_between
-import astroid
+import astroid, optimizer
 
 def f1(a,b,c,d):
     rng = np.random.RandomState(55)
@@ -61,4 +61,43 @@ def test1():
     assert len(guards)==1
     fn, startidx, endidx = guards[0]
     assert startidx == 0 and endidx==5
+
+def test_insert_guards():
+    ast = astroid.MANAGER.ast_from_file(__file__)
+    fn = ast.body[2] # f1
+    print fn
+    optimizer.insert_guards('ass_ok', fn, 7, 8)
+
+
+def test_replace_subgraph_and_code():
+    import data_flow
+    ast = astroid.MANAGER.ast_from_file(__file__)
+
+    stmts = [
+           (__file__, 5, 'line'),
+           (__file__, 6, 'line'),
+           (__file__, 7, 'line'),
+           (__file__, 8, 'line'),
+           (__file__, 9, 'line'),
+           (__file__, 10, 'line'),
+           (__file__, 11, 'return')
+    ]
+
+    dfg = data_flow.analyze_flow(stmts)
+
+    #nodes = [n for n in dfg.nodes if n.stmt_idx ==4 or (n.stmt_idx==5 and "AssName(y)" not in str(n))]
+    #nodes += [n for n in dfg.nodes if dfg.get_outgoing_edges(n) and list(dfg.get_outgoing_edges(n))[0].label in ('m','k', 'j')]
+    nodes,edges = dfg.subgraph_between([n for n in dfg.nodes if 'Call rng.uniform' in str(n)],
+            [n for n in dfg.nodes if "10(Call np.dot" in str(n)][0])
+    print "nodes", nodes
+    #edges = [e for e in dfg.edges if e.n1 in nodes and e.n2 in nodes]
+    in_edges = [e for e in dfg.edges if e.n2 in nodes and e.n1 not in nodes]
+    out_edges = [e for e in dfg.edges if e.n1 in nodes and e.n2 not in nodes]
+    new_expr = 'np.dot(j, np.dot(k,m))'
+    ass_expr = [n for n in dfg.nodes if 'Call rng.uniform' in str(n)][0]
+    assumptions = {ass_expr: '{1}'}
+    dfd = dfg.draw_digraph(colors={n: 'red' for n in nodes})
+    print dfd.view()
+
+    optimizer.replace_subgraph_and_code(dfg, nodes, edges, in_edges, out_edges, new_expr, assumptions)
 
