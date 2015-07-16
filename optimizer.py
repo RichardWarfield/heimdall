@@ -195,124 +195,37 @@ def insert_guards(varname, block, start, end, newstmts=None):
     del block.body[start:end]
     block.body.insert(start, ifo)
 
-
-def guards_between(start_block, start_idx, last_lineno):
-    """
-    Returns a list of tuples representing regions of the ast (block bodies)of the form:
-    (block, start_idx [inclusive], end_idx [exclusive])
-    """
-    block = start_block
-    stmt_idx = start_idx
-
-    guards = [] # list of (block, start_idx [inclusive], end_idx [exclusive])
-
-    # TODO  What if exit is not in the same or a parent block of entry??
-    while True:
-        # Add the rest of the block, or until we would pass the exit stmt...
-        for end_guard in range(stmt_idx, len(block.body)):
-            if block.body[end_guard].tolineno >= last_lineno:
-                break
-
-        if block.body[end_guard].lineno == last_lineno:
-            if stmt_idx != end_guard:
-                guards.append((block, stmt_idx, end_guard))
-            break # We are done!
-        # Did we get to the end of the block? Then go "down"
-        elif end_guard+1 == len(block.body):
-            if stmt_idx != end_guard+1:
-                guards.append((block, stmt_idx, end_guard+1))
-            stmt_idx = block.parent.body.index(block)+1
-            block = block.parent
-            print "Going down to block", block, stmt_idx
-        # Otherwise, the end is in a sub-block.  Go up
-        # XXX Note: we don't have to guard the test for an if/while/for. why not?
-        # Because the only way it can change sth is by calling a function, in which
-        # case we will add a function call flag.  I think.
-        else:
-            if stmt_idx != end_guard:
-                guards.append((block, stmt_idx, end_guard))
-            #import ipdb; ipdb.set_trace()
-            stmt_idx = 0
-            block = block.body[end_guard]
-            print "Going up to block ", block
-
-    return guards
-
-
-def assumption_guard_entry_exit(dfg, nodes, assumption_expr):
-    """
-
-    Returns a tuple (scope, entry, exit).
-
-    entry is a tuple (filename, lineno) corresponding to the earliest node that would have
-    been executed in the statment sequence corresponding to this dfg.
-
-    exit a tuple (filename, lineno) corresponding to the LAST node *in the same scope
-    as entry_point* that would have been executed in the statment sequence corresponding
-    to this dfg.
-
-    We are going to put an If-Else around these endpoints, so they need to be in the same
-    scope *and* at the same indentation level.
-
-    """
-    indices = [n.stmt_idx for n in nodes]
-    entry_idx, exit_idx = min(indices), max(indices)
-
-    entry, exit = dfg.stmt_sequence[entry_idx], dfg.stmt_sequence[exit_idx]
-
-    # Is exit in the same scope as entry?  Otherwise we use the next line of the entry
-    # scope as the exit
-    entry_scope = dfg.line_scope(entry[0], entry[1])
-    exit_scope = dfg.line_scope(exit[0], exit[1])
-    if entry_scope != exit_scope:
-        exit = entry
-
-    # OK... now this gets complicated.  In addition to being in the same scope the guards need
-    # to be at the same indentation level (i.e. enclosing statement).  The only way I can
-    # think to do this is to follow the statment flow and open a new If-Else every time
-    # the indentation changes in the right direction....
-    last_indent = None
-    guard_start = None
-    guards = []
-    for (i, (filename, lineno, _)) in enumerate(dfg.stmt_sequence):
-        indent = dfg.line_ident(filename, lineno)
-        if indent != last_indent:
-            # Close last guard (if applicable)
-            if last_indent is not None:
-                guards.append((guard_start, dfg.stmt_sequence[i-1][:2]))
-
-    # The rule: guard any scope we are changing EXCEPT don't guard before we start.
-    # For called (and traced) functions we can just replace the whole function.
-    # XXX Richard -- this is your newest work.
-    entry_stmts = dfg.line_statements(entry[0], entry[1])
-    exit_stmts = dfg.line_statements(exit[0], exit[1])
-
-    entry_parent = list(entry_stmts)[0].parent
-    exit_parent = list(exit_stmts)[0].parent
-
-    cur_idx = min([entry_parent.body.index(s) for s in entry_stmts])
-    guards = guards_between(entry_parent, cur_idx, exit[1])
-
-
-
-    last_idx = max([exit_parent.body.index(s) for s in exit_stmts])
-    guards.append((cur.parent, cur_idx, last_idx))
-
-
-
-
-    return entry_scope, line_to_body_idx(entry_scope, entry), line_to_body_idx(entry_scope, exit)
-
-
-def get_node_varname(dfg, node):
+def get_node_var_assign(dfg, node):
     """
     Get the var name assigned to the given expression node in this scope.  If there isn't one then
-    create a new assignment and replace the node with the name.
+    return None
+    If there is we return (name,
     """
-    for nextnode in dfg.get_outputs(node):
-        if isinstance(nextnode, data_flow.DataFlowGraph.VarAssignNode):
-            return nextnode.ast_node.name
-    assert False, "Not implementing: create name for unnamed expression"
+
+    print "Seeking name for ", node, node.ast_node.as_string()
+    for edge in dfg.get_outgoing_edges(node):
+        print "Examining edge", edge, edge.n2
+        if isinstance(edge, data_flow.DataFlowGraph.AssignEdge):
+            if edge.n2.ast_node.scope() == node.ast_node.scope():
+                return edge.n2
+        if isinstance(edge, data_flow.DataFlowGraph.AssignUseEdge):
+            if edge.n1.ast_node.scope() == node.ast_node.scope():
+                return edge.n1
+            else:
+                ass_node = get_node_var_assign(dfg, edge.n1)
+                if ass_node is not None:
+                    return ass_node
+
+        elif isinstance (edge, data_flow.DataFlowGraph.ReturnEdge):
+            ass_node = get_node_var_assign(dfg, edge.n2)
+            if ass_node is not None:
+                return ass_node
+        elif isinstance (edge, data_flow.DataFlowGraph.ArgPassEdge):
+            ass_node = get_node_var_assign(dfg, edge.n2)
+            if ass_node is not None:
+                return ass_node
+
+    return None
 
 counter = 0
 def unique_var(s):
@@ -320,9 +233,16 @@ def unique_var(s):
     counter += 1
     return s+str(counter)
 
-def make_modcode_preface(nodes_to_replace, in_edges, assumptions):
+def make_modcode_preface(dfg, nodes_to_replace, in_edges, assumptions):
     """ Creates the code (AST statements) to calculate the variables related to the in edges
-    and their assumptions. """
+    and their assumptions.
+
+    What are the different scenarios for in edges vis a vis assigning expressions to names?
+    - It's a variable name - use existing name
+    - It's a function parameter - use existing name
+    - It's an expression composition (need to name, and replace other uses)
+    - It's a return from a function (same)
+    """
     pre_nodes = {e.n1 for e in in_edges}
     for n in assumptions:
         assert n in pre_nodes, "Assumptions must relate to nodes coming via in_edges:%s"%str(n)
@@ -330,28 +250,34 @@ def make_modcode_preface(nodes_to_replace, in_edges, assumptions):
     source_names = {}
     stmts = []
     # If we rely on an existing assignment, we need the assumption line to be after that
-    last_needed_assign = 0
+    last_needed_assign = None
     for e in in_edges:
         # Does this edge already correspond to a variable name?  If so just keep using that.
-        if type(e) == data_flow.DataFlowGraph.AssignEdge:
-            name = e.n2.ast_node.name
-            last_needed_assign = max(last_needed_assign, e.n2.stmt_idx)
-        elif type(e) == data_flow.DataFlowGraph.AssignUseEdge:
-            name = e.n1.ast_node.name
+        var_ass = get_node_var_assign(dfg, e.n1)
+        mainvar('var_ass', var_ass)
+        assert var_ass is None or isinstance(var_ass, data_flow.DataFlowGraph.VarAssignNode)
+        if var_ass is not None:
+            name = var_ass.ast_node.name
+            last_needed_assign = max(last_needed_assign, var_ass.stmt_idx)
         else:
             # Need to assign a name.
             name = unique_var('inp')
-            assignment = make_assign_stmt(name, e.n1.ast_node.as_string(),
-                    e.n1.ast_node.parent)
+            assignment = make_assign_stmt(name, e.n1.ast_node.as_string(), e.n1.ast_node.parent)
             stmts.append(assignment)
         source_names[e.n1] = name
 
-    ass_ok_varname = unique_var('ass_ok')
     node_stmt_indices = partition(nodes_to_replace, lambda n: n.stmt_idx)
-    first_stmt_idx = max(last_needed_assign+1, min(node_stmt_indices.keys()))
+
+    # Calculate the first statement that should go after the preface.
+    if last_needed_assign is None:
+        first_stmt_idx = min(node_stmt_indices.keys())
+    else:
+        first_stmt_idx = max(last_needed_assign+1, min(node_stmt_indices.keys()))
     first_stmt_nodes = node_stmt_indices[first_stmt_idx]
     first_stmt = get_statement(first_stmt_nodes[0].ast_node)
+
     print "Assumptions: ", assumptions
+    ass_ok_varname = unique_var('ass_ok')
     assumption_code = ' and '.join(['('+expr.replace('{1}', source_names[n])+')'
         for (n,expr) in assumptions.iteritems()])
     stmts.append(make_assign_stmt(ass_ok_varname, assumption_code, first_stmt.parent))
@@ -367,10 +293,18 @@ def replace_subgraph_and_code(dfg, nodes_to_replace, edges_to_replace, in_edges,
     Replace a subgraph of the dfg with a graph generated from a new expression.
 
     The general strategy is:
-    1. Build a new statement that assigns a name to the value of new_expr
-    2. Insert the statement into the scope of the out_edges (must all be the same) before the
-       first out edge.
-    3. Find out which scopes are involved (contain the nodes to replace) and need to be modified
+    1. Set a name for each incoming edge (if one doesn't already exist)
+    2. Check the assumptions.  This is done in the scope where the first statement in the subgraph
+       was executed.
+    3. Delete all statements relating to the unconnected (to input or output) nodes of the graph
+    4. Before the first statment that is the target of an out edge, insert a statement
+       representing the new calculation (new_expr) and assigning it to a variable name
+    5. For every node connected to an out edge -- give the relevant (new) expression a name, and use that
+       name to replace the old expression (note there can be only one out node but many out edges)
+
+    for 3-5, we insert If/Else guards such that the original code will be executed if assumptions are not
+        met.
+
     ...
 
     Each dfg EDGE represents:
@@ -394,20 +328,17 @@ def replace_subgraph_and_code(dfg, nodes_to_replace, edges_to_replace, in_edges,
 
     # Make the preface, which will ensure the input data is named and will set the variable
     # corresponding to whether or not the assumptions are satisfied.
-    preface_stmts, insert_before, source_names, ass_ok_var = make_modcode_preface(nodes_to_replace,
+    preface_stmts, insert_before, source_names, ass_ok_var = make_modcode_preface(dfg, nodes_to_replace,
             in_edges, assumptions)
     block = insert_before.parent
     insert_where = block.body.index(insert_before)
     block.body[insert_where:insert_where] = preface_stmts
 
-
-    out_scopes = [o.n1.ast_node.scope() for o in out_edges]
     in_nodes = {e.n2 for e in in_edges}
-    print "in_nodes", in_nodes
     out_nodes = {e.n1 for e in out_edges}
 
-
     # Find all the scopes we need to change
+    scopes = partition(nodes_to_replace, lambda n: n.ast_node.scope())
     statement_nodes = partition(nodes_to_replace, lambda n: get_statement(n.ast_node))
     print "statement_nodes", statement_nodes
     block_nodes = partition(nodes_to_replace, lambda n: get_statement(n.ast_node).parent)
@@ -461,14 +392,17 @@ def replace_subgraph_and_code(dfg, nodes_to_replace, edges_to_replace, in_edges,
         stmt_orig.parent.body[stmt_loc] = stmt_copy
         # Goes before the first out edge
 
-        insert_guards(ass_ok_var, stmt_orig.parent, stmt_loc, stmt_loc+1,
-                [stmt_orig])
+        insert_guards(ass_ok_var, stmt_orig.parent, stmt_loc, stmt_loc+1, [stmt_orig])
 
-    out_scopes[0].body.insert(0, builder.string_build("print 'In the new function!'").body[0])
-    print "Changed scope ", out_scopes[0], ":"
-    print out_scopes[0].as_string()
 
-    replace_function(out_scopes[0].name, out_scopes[0].root().file, out_scopes[0].as_string())
+    print "number of scopes to change:", len(scopes)
+    for scope in scopes:
+
+        scope.body.insert(0, builder.string_build("print 'In the new function!'").body[0])
+        print "Changed scope ", scope, ":"
+        print scope.as_string()
+
+        replace_function(scope.name, scope.root().file, scope.as_string())
 
 
 def onError(e):

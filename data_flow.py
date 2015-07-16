@@ -130,7 +130,7 @@ def analyze_flow(stmt_sequence):
         # Add edge if we just returned from a function
         if return_from is not None and return_from[:2] != (filename, lineno):
             ret_to = call_stack.pop()
-            print "Returning to %s" % str(ret_to)
+            print "Returning to %s from %s" % (ret_to.as_string(), str(return_from))
             if type(ret_to.parent) is astroid.Assign:
                 for t in ret_to.parent.targets:
                     dfg.add_return_edge(stmt_idx, return_from, (ret_to.root().file, ret_to.lineno),
@@ -167,9 +167,15 @@ def analyze_flow(stmt_sequence):
                         filename, lineno, filenames, line_to_asts)
 
             # fncalls should be in precisely the order that we will call from here.
+            print "fncalls is ", [a.as_string() for a in fncalls]
             for fcall in fncalls:
                 func_def = get_func_def(fcall, filenames, st)
+                print "func_def", fcall.as_string(), func_def
+                mainvar('fcall', fcall)
+                mainvar('filenames', filenames)
+                mainvar('st', st)
                 if func_def is not None:
+                    print "Adding to call stack:", fcall
                     call_stack.append(fcall)
                     # We need an edge for each value passed.  Furthermore -- we need a "dummy"
                     # node to represent each argument
@@ -332,8 +338,8 @@ class DataFlowGraph(object):
         An edge indicating an intermediate result travels up the AST (i.e. function composition)
         """
         pass
-    class CallFuncEdge(Edge):
-        pass
+    #class CallFuncEdge(Edge):
+    #    pass
     class ReturnEdge(Edge):
         pass
     class ArgPassEdge(Edge):
@@ -370,14 +376,14 @@ class DataFlowGraph(object):
         e = self.CompositionEdge(n1, n2, "(comp)")
         self.edges.add(e)
 
-    def add_callfunc_edge(self, stmt_idx, sourceline, call_node, func_node):
-        n1 = self.CallFuncNode(stmt_idx, sourceline[0], sourceline[1],call_node)
-        n2 = self.DefFuncNode(None, func_node.root().file, func_node.lineno, func_node)
-        assert n2 not in self.nodes, "Not handling multipe calls to a function yet"
-        self.nodes.add(n1)
-        self.nodes.add(n2)
-        e = self.CallFuncEdge(n1, n2, func_node.name)
-        self.edges.add(e)
+    #def add_callfunc_edge(self, stmt_idx, sourceline, call_node, func_node):
+    #    n1 = self.CallFuncNode(stmt_idx, sourceline[0], sourceline[1],call_node)
+    #    n2 = self.DefFuncNode(None, func_node.root().file, func_node.lineno, func_node)
+    #    assert n2 not in self.nodes, "Not handling multipe calls to a function yet"
+    #    self.nodes.add(n1)
+    #    self.nodes.add(n2)
+    #    e = self.CallFuncEdge(n1, n2, func_node.name)
+    #    self.edges.add(e)
 
     def add_external_call(self, stmt_idx, line, callfunc_ast_node):
         callnode = self.ExtCallNode(stmt_idx, line[0], line[1], callfunc_ast_node)
@@ -398,7 +404,10 @@ class DataFlowGraph(object):
 
     def add_return_edge(self, stmt_idx, returnfrom, returnto, ret_node, ret_to_node):
         n1 = self.ExprNode(stmt_idx, returnfrom[0], returnfrom[1], ret_node.value)
-        n2 = self.Node(None, returnto[0], returnto[1], ret_to_node)
+        if isinstance(ret_to_node, astroid.AssName):
+            n2 = self.VarAssignNode(stmt_idx+1, returnto[0], returnto[1], ret_to_node)
+        else:
+            n2 = self.Node(stmt_idx+1, returnto[0], returnto[1], ret_to_node)
         self.nodes.add(n1)
         self.nodes.add(n2)
         e = self.ReturnEdge(n1, n2, '(return)')
@@ -407,7 +416,7 @@ class DataFlowGraph(object):
     def add_arg_pass_edge(self, stmt_idx, callline, fcall, func_def, arg):
         # arg: a pair (assignment, value) where assignment is an AssName node.
         print "Passing ", arg
-        n1 = self.Node(stmt_idx, callline[0], callline[1], fcall)
+        n1 = self.ExprNode(stmt_idx, callline[0], callline[1], fcall)
         n2 = self.VarAssignNode(None, func_def.root().file, func_def.lineno, arg[0])
         self.nodes.add(n1)
         self.nodes.add(n2)
@@ -426,11 +435,19 @@ class DataFlowGraph(object):
         #assert isinstance(node, self.ExprNode), "Not ExprNode:"+str(node)
         #print "length of inputs ", node, len(self.get_inputs(node))
         cur = node
-        while (len(self.get_inputs(cur)) == 1
-            and cur == node or type(cur.ast_node) in (astroid.Name, astroid.AssName)):
-            (cur,) = self.get_inputs(cur)
-        mainvar('lastnode', cur)
-        assert isinstance(cur, DataFlowGraph.ExprNode), 'Node was %s %s: %s'%(str(type(cur)), str(cur), cur.ast_node.as_string())
+        while True:
+            inp_edges = self.get_incoming_edges(cur)
+            print "Cur node", cur, inp_edges
+            if len(inp_edges) == 0:
+                return cur
+            elif len(inp_edges) > 1 or isinstance(list(inp_edges)[0], DataFlowGraph.CompositionEdge):
+                assert isinstance(cur, DataFlowGraph.ExprNode), \
+                        'Node was %s %s: %s'%(str(type(cur)), str(cur), cur.ast_node.as_string())
+                return cur
+            else:
+                (edge,) = inp_edges
+                cur = edge.n1
+
         return cur
 
     def get_inputs(self, node):
