@@ -2,12 +2,17 @@ import numpy as np
 import numbers
 import sys, os
 import copy
+from termcolor import cprint
+from pprint import pprint
 from numbers import Number
 import astroid
 import watcher
 from watcher import NeededInfo
 import data_flow
+from data_flow import DataFlowGraph
 import matrix_chain
+
+DRYRUN = False
 
 import logging
 logger = logging.getLogger(__name__)
@@ -60,7 +65,6 @@ def replace_function(func, filename, new_source):
         filenames = (filename, filename[:-1])
     else:
         assert False
-    print "Looking for filename", filename
     matching_modules = [v for (k,v) in sysmodules.iteritems()
             if hasattr(v, '__file__') and os.path.abspath(v.__file__) in filenames]
 
@@ -162,6 +166,11 @@ def make_unary_op(op, operand, parent):
     o.parent = parent
     return o
 
+def make_astroid_node(cls, **kwargs):
+    o = cls()
+    for (k,v) in kwargs.iteritems():
+        setattr(o, k, v)
+    return o
 
 def insert_guards(varname, block, start, end, newstmts=None):
     """
@@ -170,7 +179,7 @@ def insert_guards(varname, block, start, end, newstmts=None):
     if newstments is not None it should be a list of astroid statements and
         the new code is if(varname): (newstmts) else: (original code)
     """
-    print "insert_guard called with ", varname, block, start, end, newstmts
+    #print "insert_guard called with ", varname, block, start, end, newstmts
     ifo = astroid.If()
     newvar = astroid.Name()
     newvar.name = varname
@@ -184,12 +193,12 @@ def insert_guards(varname, block, start, end, newstmts=None):
         ifo.body = newstmts
         ifo.orelse = block.body[start:end]
 
-    print "*** Removing statements:"
-    for s in block.body[start:end]:
-        print s.as_string()
-    print '*** Replacing with'
-    print ifo.as_string()
-    print '***'
+    #print "*** Removing statements:"
+    #for s in block.body[start:end]:
+    #    print s.as_string()
+    #print '*** Replacing with'
+    #print ifo.as_string()
+    #print '***'
 
 
     del block.body[start:end]
@@ -202,9 +211,9 @@ def get_node_var_assign(dfg, node):
     If there is we return (name,
     """
 
-    print "Seeking name for ", node, node.ast_node.as_string()
+    #print "Seeking name for ", node, node.ast_node.as_string()
     for edge in dfg.get_outgoing_edges(node):
-        print "Examining edge", edge, edge.n2
+        #print "Examining edge", edge, edge.n2
         if isinstance(edge, data_flow.DataFlowGraph.AssignEdge):
             if edge.n2.ast_node.scope() == node.ast_node.scope():
                 return edge.n2
@@ -235,7 +244,15 @@ def unique_var(s):
 
 def make_modcode_preface(dfg, nodes_to_replace, in_edges, assumptions):
     """ Creates the code (AST statements) to calculate the variables related to the in edges
-    and their assumptions.
+    and their assumptions, and calculates where the statements should go.
+
+    returns a tuple (preface_stmts, insert_before, source_names, ass_ok_var)
+
+    - insert_before is a statement (ast node).  We put the preface before the first statement
+    in "nodes to replace", but after any variables involved in the assumptions are defined.
+    - source_names is a mapping from dfg nodes (sources of in edges) to variable names
+    - ass_ok_var is the name of the variable we assign the result of the assumption test to
+    (boolean)
 
     What are the different scenarios for in edges vis a vis assigning expressions to names?
     - It's a variable name - use existing name
@@ -258,7 +275,10 @@ def make_modcode_preface(dfg, nodes_to_replace, in_edges, assumptions):
         assert var_ass is None or isinstance(var_ass, data_flow.DataFlowGraph.VarAssignNode)
         if var_ass is not None:
             name = var_ass.ast_node.name
-            last_needed_assign = max(last_needed_assign, var_ass.stmt_idx)
+            if not isinstance(var_ass.ast_node.parent, astroid.Arguments):
+                # Any statement in the function can see the arguments so we can safely
+                # ignore that scenario.
+                last_needed_assign = max(last_needed_assign, var_ass.stmt_idx)
         else:
             # Need to assign a name.
             name = unique_var('inp')
@@ -267,23 +287,66 @@ def make_modcode_preface(dfg, nodes_to_replace, in_edges, assumptions):
         source_names[e.n1] = name
 
     node_stmt_indices = partition(nodes_to_replace, lambda n: n.stmt_idx)
+    #cprint(node_stmt_indices.keys(), 'green')
 
     # Calculate the first statement that should go after the preface.
     if last_needed_assign is None:
-        first_stmt_idx = min(node_stmt_indices.keys())
+        # None gets treated as a small number ... wtf!
+        first_stmt_idx = min([k for k in node_stmt_indices.keys() if k is not None])
     else:
         first_stmt_idx = max(last_needed_assign+1, min(node_stmt_indices.keys()))
     first_stmt_nodes = node_stmt_indices[first_stmt_idx]
     first_stmt = get_statement(first_stmt_nodes[0].ast_node)
 
-    print "Assumptions: ", assumptions
-    ass_ok_varname = unique_var('ass_ok')
-    assumption_code = ' and '.join(['('+expr.replace('{1}', source_names[n])+')'
-        for (n,expr) in assumptions.iteritems()])
-    stmts.append(make_assign_stmt(ass_ok_varname, assumption_code, first_stmt.parent))
+    #print "Assumptions: ", assumptions
+    if len(assumptions) > 0:
+        #cprint("Inserting assumption code before stmt %i: %s " % (first_stmt_idx, first_stmt.as_string()), "blue")
+        ass_ok_varname = unique_var('ass_ok')
+        assumption_code = ' and '.join(['('+expr.replace('{1}', source_names[n])+')'
+            for (n,expr) in assumptions.iteritems()])
+        #cprint ("Assumption code: " + assumption_code, "blue")
+        stmts.append(make_assign_stmt(ass_ok_varname, assumption_code, first_stmt.parent))
+    else:
+        ass_ok_varname = None
     return stmts, first_stmt, source_names, ass_ok_varname
 
-def replace_subgraph_and_code(dfg, nodes_to_replace, edges_to_replace, in_edges, out_edges, new_expr, assumptions):
+def add_carryalong_arguments(dfg, nodes_to_replace, in_edges, arg_names, changed_scopes, out_scope):
+    # XXX Probably what you really want to do is to do all of replace_subgraph_and_code the the
+    # XXX order the statemensts are executed.
+    to_visit = [e.n2 for e in in_edges]
+    done = set()
+    while len(to_visit) > 0:
+        n = to_visit.pop()
+        if n in done:
+            continue
+
+        # At each internal function call we need to add arguments to the call and corresponding
+        # parameters to the function definition (if we haven't already done so)
+        if isinstance(n, DataFlowGraph.IntCallFuncNode):
+            if n.func_def in changed_scopes:
+                # Add args to the call
+                for arg in arg_names:
+                    argnamenode = make_astroid_node(astroid.Name, name=arg)
+                    n.ast_node.args.append(make_astroid_node(astroid.Keyword, arg=arg, parent=n.ast_node,
+                        value=argnamenode))
+                    argnamenode.parent = n.ast_node.args[-1]
+                    n.func_def.args.args.append(make_astroid_node(astroid.AssName, name=arg,
+                        parent=n.func_def.args))
+                    n.func_def.args.defaults.append(make_astroid_node(astroid.Const, value=None,
+                        parent=n.func_def.args))
+                # Add args to the definition
+                done.add(n.ast_node)
+                done.add(n.func_def)
+
+        for on in dfg.get_outputs(n):
+            if on in nodes_to_replace:
+                to_visit.append(on)
+
+        done.add(n)
+
+
+
+def replace_subgraph_and_code(dfg, nodes_to_replace, new_expr, assumptions):
     """
 
     assumptions: a dict of pairs (dfg_node: expr) where expr is a string.  To test each assumption,
@@ -296,35 +359,28 @@ def replace_subgraph_and_code(dfg, nodes_to_replace, edges_to_replace, in_edges,
     1. Set a name for each incoming edge (if one doesn't already exist)
     2. Check the assumptions.  This is done in the scope where the first statement in the subgraph
        was executed.
-    3. Delete all statements relating to the unconnected (to input or output) nodes of the graph
+    3. Delete all statements relating to the unconnected (to output) nodes of the graph
     4. Before the first statment that is the target of an out edge, insert a statement
        representing the new calculation (new_expr) and assigning it to a variable name
     5. For every node connected to an out edge -- give the relevant (new) expression a name, and use that
        name to replace the old expression (note there can be only one out node but many out edges)
+    6. Because the inital scope (where in edges are) and final scope (where the new expression and the
+       out edges are) may be different, carry data from the first to the second via. new function args.
 
     for 3-5, we insert If/Else guards such that the original code will be executed if assumptions are not
         met.
-
-    ...
-
-    Each dfg EDGE represents:
-    - Composition in an expression (the whole statement must be deleted)
-    - Arguments in a function call TODO - THINK ABOUT THIS
-    - Assign or use var name
-    - Returning from a function TODO - THINK ABOUT THIS
-
-    Constraints for changing code:
-    - Values referenced in assumptions must be available at the start of the computation
-        -- i.e. assumption nodes need to have names assigned at the beginning
-
     """
 
     # TODO: Several things
     # - assumption guards
     # - DFG -- update or invalidate??
 
-    print "in_edges", [(e.n1, e.n2) for e in in_edges]
-    print "assumptions", assumptions
+    in_edges = {e for e in dfg.edges if e.n2 in nodes_to_replace
+            and e.n1 not in nodes_to_replace}
+    out_edges = {e for e in dfg.edges if e.n1 in nodes_to_replace
+            and e.n2 not in nodes_to_replace}
+    #print "in_edges", [(e.n1, e.n2) for e in in_edges]
+    #print "assumptions", assumptions
 
     # Make the preface, which will ensure the input data is named and will set the variable
     # corresponding to whether or not the assumptions are satisfied.
@@ -340,7 +396,7 @@ def replace_subgraph_and_code(dfg, nodes_to_replace, edges_to_replace, in_edges,
     # Find all the scopes we need to change
     scopes = partition(nodes_to_replace, lambda n: n.ast_node.scope())
     statement_nodes = partition(nodes_to_replace, lambda n: get_statement(n.ast_node))
-    print "statement_nodes", statement_nodes
+    #print "statement_nodes", statement_nodes
     block_nodes = partition(nodes_to_replace, lambda n: get_statement(n.ast_node).parent)
 
     # Delete every statement involved in nodes_to_replace unless there is an out_edge
@@ -349,13 +405,13 @@ def replace_subgraph_and_code(dfg, nodes_to_replace, edges_to_replace, in_edges,
         stmts_to_delete = [False] * len(block.body)
         for (i,stmt) in enumerate(block.body):
             if (stmt in statement_nodes
-                    and not any([nd in out_nodes for nd in statement_nodes[stmt]])
-                    and not any([nd in in_nodes for nd in statement_nodes[stmt]])):
+                    and not any([nd in out_nodes for nd in statement_nodes[stmt]])):
+                    #and not any([nd in in_nodes for nd in statement_nodes[stmt]])):
                 # XXX We should be able to delete the whole statement provided there isn't an
                 # out edge from here (?)
                 stmts_to_delete[i] = True
 
-        print "For block", block, "stmts_to_delete is ", stmts_to_delete
+        #print "For block", block, "stmts_to_delete is ", stmts_to_delete
         win_start, win_end = 0,1
 
         # TODO: Deal with block statements (If, While, For...)
@@ -387,16 +443,28 @@ def replace_subgraph_and_code(dfg, nodes_to_replace, edges_to_replace, in_edges,
         stmt_copy = builder.string_build(stmt_orig.as_string()).body[0]
         stmt_loc = stmt_orig.parent.body.index(stmt_orig)
         newexpr_assign = builder.string_build(new_expr).body[0].value
-        print "Replace", e.n1.ast_node.parent, e.n1.ast_node, newexpr_assign
+        #print "Replace", e.n1.ast_node.parent, e.n1.ast_node, newexpr_assign
         replace_child(e.n1.ast_node.parent, e.n1.ast_node, newexpr_assign)
         stmt_orig.parent.body[stmt_loc] = stmt_copy
         # Goes before the first out edge
 
         insert_guards(ass_ok_var, stmt_orig.parent, stmt_loc, stmt_loc+1, [stmt_orig])
 
+    first_scope = insert_before.scope()
+    add_carryalong_arguments(dfg, nodes_to_replace, in_edges, [ass_ok_var]+source_names.values(),
+            scopes, list(out_edges)[0].n1.ast_node.scope())
+
+
 
     print "number of scopes to change:", len(scopes)
     for scope in scopes:
+        if scope != first_scope:
+            # Add an argument for the assumption ok switch
+            assert isinstance(scope, astroid.Function)
+
+            scope.args.args.append(make_astroid_node(astroid.AssName, name=ass_ok_var,
+                parent=scope.args))
+            scope.args.defaults.append(make_astroid_node(astroid.Const, value=False, parent=scope.args))
 
         scope.body.insert(0, builder.string_build("print 'In the new function!'").body[0])
         print "Changed scope ", scope, ":"
@@ -437,7 +505,7 @@ class Optimizer(object):
 
         #XXX Debug code
         #self.candidates = candidates
-        print "Optimize candidates", candidates
+        #print "Optimize candidates", candidates
 
         return longest
 
@@ -452,7 +520,15 @@ class Optimizer(object):
         pass
 
     def optimize_matrix_chain(self, func, dfg):
-        """ Look for (effectively) nested calls to dot """
+        """
+        Look for (effectively) nested calls to dot.
+        The meat of this function is
+        1) get information about all external calls - to filter those which are to np.dot
+        2) get information on the shapes of the arguments to each np.dot (get_dot_shapes)
+        3) find chained dot calls
+        4) for each chain, calculate the optimal order, generate a new expression, and
+           call replace_subgraph_and_code to put it in.
+        """
         assumptions = {}
 
 
@@ -500,11 +576,13 @@ class Optimizer(object):
             for (dotcall_ni, shape) in dot_shapes.iteritems():
                 if len(shape) == 2:
                     chain_for(dotcall_ni.dfg_node, shape, dot_call_dfg_nodes)
+
             # Remove incomplete chains
             for d in subchains:
                 done_chains.pop(d, None)
 
-            print "And here are the chains: ", done_chains
+            print "And here are the chains: "
+            pprint(done_chains)
 
             for (end, inputs) in done_chains.iteritems():
                 for (source, shape) in inputs:
@@ -518,12 +596,11 @@ class Optimizer(object):
                         end.ast_node.func.as_string())
 
                 nodes_to_replace, edges_to_replace = dfg.subgraph_between(chain_inputs, end)
-                in_edges = {e for e in dfg.edges if e.n2 in nodes_to_replace
-                        and e.n1 not in nodes_to_replace}
-                out_edges = dfg.get_outgoing_edges(end)
-                replace_subgraph_and_code(dfg, nodes_to_replace, edges_to_replace, in_edges, out_edges, new_chain_expr,
-                        assumptions)
-                print "func is", func
+                cprint( "Going to replace a subgraph, saved as 'last_subgraph'", 'red')
+                mainvar('last_subgraph', nodes_to_replace)
+                if not DRYRUN:
+                    replace_subgraph_and_code(dfg, nodes_to_replace, new_chain_expr, assumptions)
+                #print "func is", func
 
 
 

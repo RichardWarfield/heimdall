@@ -32,7 +32,15 @@ class Heimdall(object):
 
 
     def p_callback(self, stattree):
-        print "Got p_callback"
+        """
+        Based on the profiling statistics [and optimization history -- TODO], we choose which function
+        to try to optimize.
+        Then we watch the next invocation of this function to produce a statement list we will try
+        optimizations on.
+        Once the statement list is ready it is passed to watcher_callback.
+        """
+
+        #print "Got p_callback"
         target_func = self.optimizer.choose_function_to_optimize(stattree, self.max_nesting)
         target = os.path.abspath(os.path.join(target_func.directory, target_func.filename)), target_func.name
         print "Going to watch for %s" % str(target)
@@ -40,9 +48,9 @@ class Heimdall(object):
         self.watcher.watch_next_invocation(target, self.watcher_callback)
 
     def watcher_callback(self, line_history):
-        print "Line history:", line_history
+        #print "Line history:", line_history
         self.dfg = data_flow.analyze_flow(self.watcher.tracer)
-        print "Going to start optimizer test now"
+        #print "Going to start optimizer test now"
         self.optimizer.optimize_matrix_chain(self.watcher.target_func, self.dfg)
 
 

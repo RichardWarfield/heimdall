@@ -85,7 +85,7 @@ class FunctionWatcher(object):
             #    print "In invocation of %s, frame is %s, outer is %s" % (func_name, str(frame), str(frame.f_back))
             if (filename,func_name) == self.target_func:
                 if not self.tracing:
-                    print "Starting trace", func_name, lineno
+                    #print "Starting trace", func_name, lineno
                     self.tracing = True
                     self.start_trace_frame = frame
                 # XXX Is this the right function?  Could another have the same name?
@@ -121,7 +121,7 @@ class FunctionWatcher(object):
             self.cum_times[(filename, lineno)] = time_spent + self_time
 
             if other_frame == self.start_trace_frame:
-                print "Returning from %s and terminating trace" % key, func_name, lineno
+                #print "Returning from %s and terminating trace" % key, func_name, lineno
                 # Returning from where we started tracing
                 self.stop_watching()
                 self.finished_callback(self.tracer)

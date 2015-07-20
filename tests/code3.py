@@ -9,11 +9,11 @@ def g(n):
         print "g iter %i Took %f seconds, sum is %f" %(i, time.time() - t, x.sum())
     print x.shape
 
-def func2(a, b):
+def func2(a, b=1):
     return np.dot(a, b)
 
 def func1(a,b,c):
-    return func2(a, np.dot(b, c))
+    return func2(a, b=np.dot(b, c))
 
 
 def f1(a,b,c,d):
