@@ -311,8 +311,8 @@ def make_modcode_preface(dfg, nodes_to_replace, in_edges, assumptions):
     return stmts, first_stmt, source_names, ass_ok_varname
 
 def add_carryalong_arguments(dfg, nodes_to_replace, in_edges, arg_names, changed_scopes, out_scope):
-    # XXX Probably what you really want to do is to do all of replace_subgraph_and_code the the
-    # XXX order the statemensts are executed.
+    # XXX Probably what you really want to do is to do all of replace_subgraph_and_code in the
+    # XXX order the statements are executed.
     to_visit = [e.n2 for e in in_edges]
     done = set()
     while len(to_visit) > 0:
@@ -379,8 +379,13 @@ def replace_subgraph_and_code(dfg, nodes_to_replace, new_expr, assumptions):
             and e.n1 not in nodes_to_replace}
     out_edges = {e for e in dfg.edges if e.n1 in nodes_to_replace
             and e.n2 not in nodes_to_replace}
-    #print "in_edges", [(e.n1, e.n2) for e in in_edges]
-    #print "assumptions", assumptions
+    out_nodes = {e.n1 for e in out_edges}
+
+    # Check that all in edges are in (going to) the same scope
+    in_scopes = set([e.n2.ast_node.scope() for e in in_edges])
+    assert len(in_scopes) == 1, "All in edges must point to the same scope; instead I see %i scopes" \
+            % len(in_scopes)
+    first_scope = in_scopes.pop()
 
     # Make the preface, which will ensure the input data is named and will set the variable
     # corresponding to whether or not the assumptions are satisfied.
@@ -389,53 +394,87 @@ def replace_subgraph_and_code(dfg, nodes_to_replace, new_expr, assumptions):
     block = insert_before.parent
     insert_where = block.body.index(insert_before)
     block.body[insert_where:insert_where] = preface_stmts
+    assert first_scope == insert_before.scope()
 
-    in_nodes = {e.n2 for e in in_edges}
-    out_nodes = {e.n1 for e in out_edges}
+    to_visit = [e.n2 for e in in_edges]
+    done = set()
 
-    # Find all the scopes we need to change
-    scopes = partition(nodes_to_replace, lambda n: n.ast_node.scope())
     statement_nodes = partition(nodes_to_replace, lambda n: get_statement(n.ast_node))
+    while len(to_visit) > 0:
+        n = to_visit.pop()
+        if n in done:
+            continue
+
+        # Is it an IntCallFuncNode?  Follow with the right information.
+        # Is anything in this statement attached to an out edge?  Otherwise we guard around it
+        # (track where each window starts/ends)
+        stmt = get_statement(n.ast_node)
+
+        if isinstance(n, DataFlowGraph.IntCallFuncNode):
+            # Add args to the call
+            for arg in source_names:
+                argnamenode = make_astroid_node(astroid.Name, name=arg)
+                n.ast_node.args.append(make_astroid_node(astroid.Keyword, arg=arg, parent=n.ast_node,
+                    value=argnamenode))
+                argnamenode.parent = n.ast_node.args[-1]
+                n.func_def.args.args.append(make_astroid_node(astroid.AssName, name=arg,
+                    parent=n.func_def.args))
+                n.func_def.args.defaults.append(make_astroid_node(astroid.Const, value=None,
+                    parent=n.func_def.args))
+            # Add args to the definition
+            done.add(n.ast_node)
+            done.add(n.func_def)
+
+        elif not any([nd in out_nodes for nd in statement_nodes[stmt]]):
+            win_start = stmt.parent.body.index(stmt)
+            win_end = win_start + 1
+            insert_guards(ass_ok_var, stmt.parent, win_start, win_end)
+
+        for on in dfg.get_outputs(n):
+            if on in nodes_to_replace:
+                to_visit.append(on)
+
+        done.add(n)
+
+
+
+
+
+
     #print "statement_nodes", statement_nodes
-    block_nodes = partition(nodes_to_replace, lambda n: get_statement(n.ast_node).parent)
+    #block_nodes = partition(nodes_to_replace, lambda n: get_statement(n.ast_node).parent)
 
-    # Delete every statement involved in nodes_to_replace unless there is an out_edge
+    # Flow around every statement involved in nodes_to_replace unless there is an out_edge
     # from there (in which case we need to modify the statement to use the new variable)
-    for block, nodes in block_nodes.iteritems():
-        stmts_to_delete = [False] * len(block.body)
-        for (i,stmt) in enumerate(block.body):
-            if (stmt in statement_nodes
-                    and not any([nd in out_nodes for nd in statement_nodes[stmt]])):
-                    #and not any([nd in in_nodes for nd in statement_nodes[stmt]])):
-                # XXX We should be able to delete the whole statement provided there isn't an
-                # out edge from here (?)
-                stmts_to_delete[i] = True
+    #for block, nodes in block_nodes.iteritems():
+    #    stmts_to_delete = [False] * len(block.body)
+    #    for (i,stmt) in enumerate(block.body):
+    #        if (stmt in statement_nodes
+    #                and not any([nd in out_nodes for nd in statement_nodes[stmt]])):
+    #            # XXX We should be able to delete the whole statement provided there isn't an
+    #            # out edge from here (?)
+    #            stmts_to_delete[i] = True
 
-        #print "For block", block, "stmts_to_delete is ", stmts_to_delete
-        win_start, win_end = 0,1
+    #    #print "For block", block, "stmts_to_delete is ", stmts_to_delete
+    #    win_start, win_end = 0,1
 
-        # TODO: Deal with block statements (If, While, For...)
-        # TODO What if we visit the same line twice?
-        for i in xrange(1,  len(stmts_to_delete)):
-            if stmts_to_delete[i]:
-                if not stmts_to_delete[i-1]:
-                    win_start = i
-                    win_end = i+1
-                else:
-                    win_end += 1
-            else:
-                if stmts_to_delete[win_start]: # may be false at start of block
-                    insert_guards(ass_ok_var, block, win_start, win_end)
-                win_start = win_end = i
+    #    # TODO: Deal with block statements (If, While, For...)
+    #    # TODO What if we visit the same line twice?
+    #    for i in xrange(1,  len(stmts_to_delete)):
+    #        if stmts_to_delete[i]:
+    #            if not stmts_to_delete[i-1]:
+    #                win_start = i
+    #                win_end = i+1
+    #            else:
+    #                win_end += 1
+    #        else:
+    #            if stmts_to_delete[win_start]: # may be false at start of block
+    #                insert_guards(ass_ok_var, block, win_start, win_end)
+    #            win_start = win_end = i
 
 
     # Finally -- replace the source of the out edges with the new variable
     for e in out_edges:
-        #print "out edge", e, e.n1, e.n2
-        #newvar = astroid.Name()
-        #newvar.name = new_var_name
-        #print "Replacing outgoing edge source with ", newvar
-
         # A little bit of dancing here.  It's easier to change the original node than
         # in the copy... so we change the original then replace the original with the copy,
         # then use the original as the newstmts in insert_guards
@@ -450,27 +489,29 @@ def replace_subgraph_and_code(dfg, nodes_to_replace, new_expr, assumptions):
 
         insert_guards(ass_ok_var, stmt_orig.parent, stmt_loc, stmt_loc+1, [stmt_orig])
 
-    first_scope = insert_before.scope()
-    add_carryalong_arguments(dfg, nodes_to_replace, in_edges, [ass_ok_var]+source_names.values(),
-            scopes, list(out_edges)[0].n1.ast_node.scope())
-
-
-
-    print "number of scopes to change:", len(scopes)
-    for scope in scopes:
-        if scope != first_scope:
-            # Add an argument for the assumption ok switch
-            assert isinstance(scope, astroid.Function)
-
-            scope.args.args.append(make_astroid_node(astroid.AssName, name=ass_ok_var,
-                parent=scope.args))
-            scope.args.defaults.append(make_astroid_node(astroid.Const, value=False, parent=scope.args))
-
-        scope.body.insert(0, builder.string_build("print 'In the new function!'").body[0])
-        print "Changed scope ", scope, ":"
-        print scope.as_string()
-
-        replace_function(scope.name, scope.root().file, scope.as_string())
+#    first_scope = insert_before.scope()
+#    add_carryalong_arguments(dfg, nodes_to_replace, in_edges, [ass_ok_var]+source_names.values(),
+#            scopes, list(out_edges)[0].n1.ast_node.scope())
+#
+#
+#
+#    # Find all the scopes we need to change
+#    scopes = partition(nodes_to_replace, lambda n: n.ast_node.scope())
+#    print "number of scopes to change:", len(scopes)
+#    for scope in scopes:
+#        if scope != first_scope:
+#            # Add an argument for the assumption ok switch
+#            assert isinstance(scope, astroid.Function)
+#
+#            scope.args.args.append(make_astroid_node(astroid.AssName, name=ass_ok_var,
+#                parent=scope.args))
+#            scope.args.defaults.append(make_astroid_node(astroid.Const, value=False, parent=scope.args))
+#
+#        scope.body.insert(0, builder.string_build("print 'In the new function!'").body[0])
+#        print "Changed scope ", scope, ":"
+#        print scope.as_string()
+#
+#        replace_function(scope.name, scope.root().file, scope.as_string())
 
 
 def onError(e):
