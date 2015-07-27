@@ -13,7 +13,7 @@ def func2(a, b=1):
     return np.dot(a, b)
 
 def func1(a,b,c):
-    return func2(a=np.dot(a,b), b=c)
+    return a.sum()*np.dot(b,c)
 
 
 def f1(a,b,c,d):
@@ -21,4 +21,7 @@ def f1(a,b,c,d):
     j = rng.uniform(size=(a,b))
     k = rng.uniform(size=(b,c))
     m = rng.uniform(size=(c,d))
-    return func1(j,k,m)
+    t1 = func2(j,k)
+    return func1(j, func2(j,k),m)
+
+

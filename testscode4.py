@@ -13,7 +13,7 @@ def func2(a, b=1):
     return np.dot(a, b)
 
 def func1(a,b,c):
-    return func2(a=np.dot(a,b), b=c)
+    return func2(a, b=np.dot(b, c))
 
 
 def f1(a,b,c,d):
