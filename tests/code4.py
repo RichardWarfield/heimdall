@@ -5,15 +5,12 @@ def g(n):
     for i in range(n):
         e = 2500
         t = time.time()
-        x = f1(1500, e, 3000, 1000)
+        x = f1(1400, e, 2900, 900)
         print "g iter %i Took %f seconds, sum is %f" %(i, time.time() - t, x.sum())
     print x.shape
 
 def func2(a, b=1):
     return np.dot(a, b)
-
-def func1(a,b,c):
-    return a.sum()*np.dot(b,c)
 
 
 def f1(a,b,c,d):
@@ -22,6 +19,6 @@ def f1(a,b,c,d):
     k = rng.uniform(size=(b,c))
     m = rng.uniform(size=(c,d))
     t1 = func2(j,k)
-    return func1(j, func2(j,k),m)
+    return func2(t1, m)
 
 

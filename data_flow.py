@@ -119,7 +119,11 @@ def analyze_flow(stmt_sequence):
 
     dfg = DataFlowGraph()
 
-    follow_statements_until_return(dfg, stmt_sequence, 0, line_to_asts, filenames)
+    stmt, nstmts = follow_statements_until_return(dfg, stmt_sequence, 0, line_to_asts, filenames)
+    terminal_nodes = dfg.terminal_nodes()
+    for tn in terminal_nodes:
+        if not tn.ast_node.is_statement:
+            dfg.add_terminal_edge(len(stmt_sequence)-1, tn)
 
     # For tracking where data from return statements will flow to (file/line)
 
@@ -347,6 +351,8 @@ class DataFlowGraph(object):
     class IntCallFuncNode(ExprNode):
         """ Follows data across function calls. """
         pass
+    class TerminalNode(Node):
+        pass
 
     class Edge(object):
         def __init__(self, n1, n2, label):
@@ -476,6 +482,19 @@ class DataFlowGraph(object):
         self.edges.add(e)
         return e
 
+    def add_terminal_edge(self, stmt_idx, final_node):
+        # arg: a pair (assignment, value) where assignment is an AssName node.
+        #print "Passing ", arg
+        final_ast = final_node.ast_node
+        # TODO: this assert really should be here
+        #assert isinstance(final_ast.parent, astroid.Discard) or isinstance(final_ast.parent, astroid.Return)
+        n1 = self.get_node_from_ast(final_ast)
+        n2 = self.TerminalNode(None, final_ast.parent.root().file, final_ast.parent.lineno, final_ast.parent)
+        self.nodes.add(n2)
+        e = self.Edge(n1, n2, 'terminal')
+        self.edges.add(e)
+        return e
+
     def add_external_dep(self, var, stmt_idx, filename, lineno, ast_node):
         if var in self.external_deps:
             self.external_deps[var, get_enclosing_scope(ast_node)].append((stmt_idx, filename, lineno, ast_node))
@@ -568,6 +587,8 @@ class DataFlowGraph(object):
                     return e.n1
         return default
 
+    def terminal_nodes(self):
+        return {n for n in self.nodes if len(self.get_outgoing_edges(n)) == 0}
 
     def get_outputs(self, node):
         """ Returns the nodes that have edges from this node """
@@ -586,18 +607,26 @@ class DataFlowGraph(object):
         (exclusive) to end_node (inclusive) """
         ret_nodes, ret_edges = set(), set()
         ret_nodes.add(end_node)
+        to_visit = set()
+        to_visit.update(start_nodes)
 
         def sg_between_inner(start_node):
             outgoing_edges = self.get_outgoing_edges(start_node)
-            assert len(outgoing_edges) > 0, "Reached end of graph without seeing end node %s"%str(start_node)
+            print "sg_bewteen_inner visiting", start_node, start_node.ast_node.as_string()
+            if start_node == end_node:
+                return True
             for e in outgoing_edges:
                 ret_edges.add(e)
-                if e.n2 not in ret_nodes:
-                    ret_nodes.add(e.n2)
-                    sg_between_inner(e.n2)
+                ret_nodes.add(e.n2)
+                to_visit.add(e.n2)
 
-        for sn in start_nodes:
-            sg_between_inner(sn)
+
+        found = False
+        while len(to_visit) > 0:
+            sn = to_visit.pop()
+            found = found or sg_between_inner(sn)
+
+        assert found, "Reached end of graph without seeing end node %s"%str(end_node)
 
         return ret_nodes, ret_edges
 

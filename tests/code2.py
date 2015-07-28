@@ -5,7 +5,7 @@ def g(n):
     for i in range(n):
         e = 2500
         t = time.time()
-        x = f1(1500, e, 3000, 1000)
+        x = f1(1400, e, 2800, 900)
         print "g iter %i Took %f seconds, sum is %f" %(i, time.time() - t, x.sum())
     print x.shape
 

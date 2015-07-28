@@ -254,7 +254,7 @@ def connect_new_code_to_outputs(out_edges, input_nodes, scope_input_names, new_e
     """
     Change the targets of the out edges to use the new calculation given by new_expr
     """
-    # Finally -- replace the source of the out edges with the new variable
+    # Replace the source of the out edges with the new variable
     for e in out_edges:
         # A little bit of dancing here.  It's easier to change the original node than
         # in the copy... so we change the original then replace the original with the copy,
@@ -374,6 +374,8 @@ def replace_subgraph_and_code(dfg, nodes_to_replace, input_nodes, new_expr, assu
     in_edges = {e for e in dfg.edges if e.n2 in nodes_to_replace and e.n1 not in nodes_to_replace}
     out_edges = {e for e in dfg.edges if e.n1 in nodes_to_replace and e.n2 not in nodes_to_replace}
     out_nodes = {e.n1 for e in out_edges}
+    assert len(out_nodes) == 1
+    out_node = out_nodes.pop()
 
     # Check that all in edges are in (going to) the same scope
     in_scopes = set([e.n2.ast_node.scope() for e in in_edges])
@@ -410,7 +412,7 @@ def replace_subgraph_and_code(dfg, nodes_to_replace, input_nodes, new_expr, assu
         # Is it an IntCallFuncNode?  Follow with the right information.
         # Is anything in this statement attached to an out edge?  Otherwise we guard around it
         # (track where each window starts/ends)
-        if not any([nd in out_nodes for nd in statement_nodes[stmt]]):
+        if not any([nd == out_node for nd in statement_nodes[stmt]]):
             local_aov = scope_input_names[(ass_ok_var, stmt.scope())]
 
             if isinstance(stmt, astroid.Function):
