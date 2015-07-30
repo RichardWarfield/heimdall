@@ -323,7 +323,8 @@ def prepare_statement_with_internal_calls(dfg, nodes_to_replace, stmt, snodes, i
             # calculation or not?  If it is we can just delete it (send None).
             # Add args to the call
             for i,arg in enumerate(sn.ast_node.args):
-                exprnode = dfg.get_node_from_ast(arg.value if isinstance(arg, astroid.Keyword) else arg)
+                exprnode = dfg.ExprNode(sn.stmt_idx, sn.filename, sn.lineno,
+                    arg.value if isinstance(arg, astroid.Keyword) else arg)
                 if exprnode in nodes_to_replace:
                     noneconst = make_astroid_node(astroid.Const, value=None)
                     if isinstance(arg, astroid.Keyword):
