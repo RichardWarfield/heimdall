@@ -5,6 +5,8 @@ import cpu_tools
 import pdb
 import os.path
 import copy
+from termcolor import cprint
+from pprint import pprint
 from aplus import Promise
 
 import logging
@@ -57,11 +59,14 @@ class FunctionWatcher(object):
         co = frame.f_code
         func_name = co.co_name
         filename, lineno = os.path.abspath(frame.f_code.co_filename), frame.f_lineno
+        cprint("trace_line at %i" % lineno, "green")
+
 
         if (filename, lineno) in self.needed_info:
             ni = self.needed_info[(filename, lineno)]
             #print "in trace line, getting info"
             #print "trace_line evaluating the following expression: ", expr
+            print "trace_line getting needed_info:", self.needed_info[filename, lineno]
             try:
                 res = eval(ni.expr, frame.f_globals, frame.f_locals)
             except Exception as detail:

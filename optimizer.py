@@ -89,6 +89,8 @@ class Optimizer(object):
             are not used elsewhere (so we can freely change the order of multiplications).
 
             When this function completes the full chain will be stored in done_chains."""
+            cprint("chain_for called with " + str(dfg_node), 'red')
+            cprint("dot_shapes is " + str(dot_shapes), 'red')
             res = []
             a_inp = dfg.get_callarg_value_node(dfg_node, 'a', 0)
             b_inp = dfg.get_callarg_value_node(dfg_node, 'b', 1)
@@ -106,6 +108,7 @@ class Optimizer(object):
                 else:
                     res += [(arg_source, shape[i])]
             done_chains[dfg_node] = res
+            print "chain_for returning", res
             return res
 
         def mult_order_to_expr(inputs, order, func):
@@ -163,6 +166,8 @@ class Optimizer(object):
         def get_dot_shapes(funccall_info):
             #print "In get dot shapes with funccall_info", funccall_info
             need_arg_shapes = []
+            print "got funccall_info"
+            pprint(funccall_info)
             for (ni,f) in funccall_info.iteritems():
                 #print "ni, f, ", ni, f
                 if f == np.dot:
@@ -177,9 +182,10 @@ class Optimizer(object):
 
         # Get (references to) all the function calls in the graph
         #print "Nodes", dfg.nodes
-        func_calls = [NeededInfo((n.filename, n.lineno), n.ast_node.func.as_string(), n) for n in dfg.nodes
-            if dfg.is_external_call(n)]
-        #print "func_calls looking for info for ", func_calls
+        func_calls = [NeededInfo((n.line.filename, n.line.lineno), n.ast_node.func.as_string(), n)
+                for n in dfg.nodes if isinstance(n, DataFlowGraph.ExtCallNode)]
+        print "func_calls looking for info for "
+        pprint(func_calls)
         p = watcher.get_runtime_info(func, func_calls).then(get_dot_shapes).then(optimize_chain_inner).done(None, onError)
 
 
