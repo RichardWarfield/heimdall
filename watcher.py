@@ -19,6 +19,7 @@ class FunctionWatcher(object):
         # Each tracer is a list of line numbers that have been visited
         self.tracer = []
         self.tracing = False
+        self.tracer_hash = 0
         self.start_trace_frame = None
 
     def watch_next_invocation(self, func, callback, needed=None):
@@ -30,7 +31,16 @@ class FunctionWatcher(object):
         self.stack = []
         if isinstance(needed, NeededInfo):
             needed = (needed,)
-        self.needed_info = {ni.line: ni for ni in needed} if needed else {}
+
+        self.needed_info = {}
+        if needed:
+            hsh = 0
+            for ni in needed:
+                for i in range(ni.stmt_idx+1):
+                    hsh += hash(ni.stmt_sequence[i])
+                    self.needed_info[hsh] = ni
+
+        #self.needed_info = {ni.line: ni for ni in needed} if needed else {}
         self.saved_info = {} # Stores the needed_info results
         #sys.settrace(self.trace_cb)
         self.target_func = func
@@ -54,7 +64,7 @@ class FunctionWatcher(object):
     def trace_line(self, frame, event, arg):
         """
         """
-        if not self.tracing:
+       if not self.tracing:
             return
         co = frame.f_code
         func_name = co.co_name
@@ -62,11 +72,12 @@ class FunctionWatcher(object):
         cprint("trace_line at %i" % lineno, "green")
 
 
-        if (filename, lineno) in self.needed_info:
-            ni = self.needed_info[(filename, lineno)]
+        self.tracer_hash += hash((filename, lineno, event))
+        if self.tracer_hash in self.needed_info:
+            ni = self.needed_info[tracer_hash]
             #print "in trace line, getting info"
             #print "trace_line evaluating the following expression: ", expr
-            print "trace_line getting needed_info:", self.needed_info[filename, lineno]
+            print "trace_line getting needed_info:", self.needed_info[tracer_hash]
             try:
                 res = eval(ni.expr, frame.f_globals, frame.f_locals)
             except Exception as detail:
@@ -146,11 +157,12 @@ class NeededInfo(object):
 
     ast_node can be an astroid node or a of astroid nodes.
     """
-    def __init__(self, line, expr, dfg_node=None):
-        self.line, self.expr, self.dfg_node = line, expr, dfg_node
+    def __init__(self, stmt_sequence, stmt_idx, expr, dfg_node=None):
+        self.stmt_sequence, self.stmt_idx, self.expr, self.dfg_node = stmt_sequence, stmt_idx, expr, dfg_node
 
     def __repr__(self):
-        return "NeededInfo: "+str((self.line[0], self.line[1], self.expr, self.dfg_node))
+        return "NeededInfo: "+str((self.stmt_sequence[self.stmt_idx][0],
+            self.stmt_sequence[self.stmt_idx][1], self.stmt_idx, self.expr, self.dfg_node))
 
 
 def get_runtime_info(func, info_or_list):

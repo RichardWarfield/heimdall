@@ -171,7 +171,7 @@ class Optimizer(object):
             for (ni,f) in funccall_info.iteritems():
                 #print "ni, f, ", ni, f
                 if f == np.dot:
-                    need_arg_shapes.append(NeededInfo(ni.line,
+                    need_arg_shapes.append(NeededInfo(ni.stmt_sequence, ni.stmt_idx,
                         '['+(','.join([a.as_string()+'.shape' for a in ni.dfg_node.ast_node.args]))+']',
                         ni.dfg_node ))
 
@@ -182,27 +182,13 @@ class Optimizer(object):
 
         # Get (references to) all the function calls in the graph
         #print "Nodes", dfg.nodes
-        func_calls = [NeededInfo((n.line.filename, n.line.lineno), n.ast_node.func.as_string(), n)
+        func_calls = [NeededInfo(dfg.stmt_sequence, n.stmt_idx, n.ast_node.func.as_string(), n)
                 for n in dfg.nodes if isinstance(n, DataFlowGraph.ExtCallNode)]
         print "func_calls looking for info for "
         pprint(func_calls)
         p = watcher.get_runtime_info(func, func_calls).then(get_dot_shapes).then(optimize_chain_inner).done(None, onError)
 
 
-    def optimize_test(self, func, dfg):
-        def mycb(res):
-            #print "1235"
-            print "mycb: ", type(res), res
-        we_need = []
-        print "external deps: ", dfg.external_deps
-        for (var, scope) in dfg.external_deps:
-            stmt_idx, filename, lineno, ast_node = dfg.external_deps[(var, scope)][0]
-            assert not ast_node.is_statement, "Trying to eval statement (not expression)"
-            we_need.append(watcher.NeededInfo((filename, lineno), ast_node.as_string(), None))
-        p = watcher.get_runtime_info(func, we_need)
-        p.then(mycb).done(None, onError)
-
-        print "Now watching for %s" % str(func)
 
 
 
