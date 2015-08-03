@@ -32,18 +32,18 @@ class FunctionWatcher(object):
         if isinstance(needed, NeededInfo):
             needed = (needed,)
 
-        self.tracer_hash = 0
         self.needed_info = {}
         if needed:
+            hsh = 0
             for ni in needed:
-                hsh = 0
+                self.tracer_hash = 0
                 for i in range(ni.stmt_idx+1):
                     hsh += hash(ni.stmt_sequence[i])
-                    #cprint ("adding to hash %s: %i"%(str(ni.stmt_sequence[i]), hsh), 'green')
+                    cprint ("adding to hash %s: %i"%(str(ni.stmt_sequence[i]), hsh), 'green')
                 self.needed_info[hsh] = ni
 
-        #cprint("hashed needed_info:", "blue")
-        #pprint(self.needed_info)
+        cprint("hashed needed_info:", "blue")
+        pprint(self.needed_info)
 
         #self.needed_info = {ni.line: ni for ni in needed} if needed else {}
         self.saved_info = {} # Stores the needed_info results
@@ -76,21 +76,21 @@ class FunctionWatcher(object):
         filename, lineno = os.path.abspath(frame.f_code.co_filename), frame.f_lineno
 
         self.tracer_hash += hash((filename, lineno, event))
-        #cprint ("adding to tracer_hash %s: %i"%(str((filename, lineno, event)), self.tracer_hash), 'green')
+        cprint ("adding to tracer_hash %s: %i"%(str((filename, lineno, event)), self.tracer_hash), 'green')
 
         if self.tracer_hash in self.needed_info:
             ni = self.needed_info[self.tracer_hash]
             #print "in trace line, getting info"
             #print "trace_line evaluating the following expression: ", expr
-            #print "trace_line getting needed_info for hash %i at (%s, %i):"%(self.tracer_hash, filename, lineno), ni
+            print "trace_line getting needed_info for hash %i at (%s, %i):"%(self.tracer_hash, filename, lineno), ni
             try:
                 res = eval(ni.expr, frame.f_globals, frame.f_locals)
             except Exception as detail:
                 print detail
                 raise
             self.saved_info[ni] = res
-        #else:
-            #cprint ("Hash miss: %i" % self.tracer_hash, "red")
+        else:
+            cprint ("Hash miss: %i" % self.tracer_hash, "red")
 
         self.tracer.append((filename, lineno, event))
 

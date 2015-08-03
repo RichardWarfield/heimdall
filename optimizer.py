@@ -182,7 +182,7 @@ class Optimizer(object):
 
         # Get (references to) all the function calls in the graph
         #print "Nodes", dfg.nodes
-        func_calls = [NeededInfo(dfg.stmt_sequence, n.stmt_idx, n.ast_node.func.as_string(), n)
+        func_calls = [NeededInfo(dfg.stmt_sequence, n.line.stmt_idx, n.ast_node.func.as_string(), n)
                 for n in dfg.nodes if isinstance(n, DataFlowGraph.ExtCallNode)]
         print "func_calls looking for info for "
         pprint(func_calls)

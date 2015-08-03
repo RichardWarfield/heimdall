@@ -169,11 +169,11 @@ def unique_var(s):
 def subgraph_first_location(nodes_to_replace):
     min_idx = sys.maxint
     for n in nodes_to_replace:
-        stmt_idx = n.stmt_idx
+        stmt_idx = n.line.stmt_idx
         # If the ONLY node from a given statement is a VarAssignNode, this must be
         # an input edge and we can exclude it.
-        if n.stmt_idx < min_idx and not isinstance(n, DataFlowGraph.VarAssignNode):
-            min_idx = n.stmt_idx
+        if n.line.stmt_idx < min_idx and not isinstance(n, DataFlowGraph.VarAssignNode):
+            min_idx = n.line.stmt_idx
     return min_idx
 
 
@@ -212,7 +212,7 @@ def make_modcode_preface(dfg, nodes_to_replace, inp_nodes, in_edges, assumptions
             if not isinstance(var_ass.ast_node.parent, astroid.Arguments):
                 # Any statement in the function can see the arguments so we can safely
                 # ignore that scenario.
-                needed_assigns.add(var_ass.stmt_idx)
+                needed_assigns.add(var_ass.line.stmt_idx)
         else:
             # Need to assign a name.
             name = unique_var('inp')
@@ -220,15 +220,20 @@ def make_modcode_preface(dfg, nodes_to_replace, inp_nodes, in_edges, assumptions
             stmts.append(assignment)
         source_names[e.n1] = name
 
-    node_stmt_indices = partition(nodes_to_replace, lambda n: n.stmt_idx)
+    node_stmt_indices = partition(nodes_to_replace, lambda n: n.line.stmt_idx)
     #cprint(node_stmt_indices.keys(), 'green')
     cprint(needed_assigns, 'green')
 
     # Make sure we have all the data we need to check the assumptions
     if len(needed_assigns) != 0:
         last_needed_assign = max(needed_assigns)
-        for stmt_idx in node_stmt_indices.keys():
+        for n in nodes_to_replace:
+            stmt_idx = n.line.stmt_idx
             if stmt_idx is None:
+                continue
+            elif type(n) in (DataFlowGraph.VarAssignNode,):
+                # Require more than just an assignment before we say this statement
+                # is needed...
                 continue
             elif stmt_idx < last_needed_assign:
                 raise Exception("Couldn't find a place to put the preface")
@@ -323,7 +328,7 @@ def prepare_statement_with_internal_calls(dfg, nodes_to_replace, stmt, snodes, i
             # calculation or not?  If it is we can just delete it (send None).
             # Add args to the call
             for i,arg in enumerate(sn.ast_node.args):
-                exprnode = dfg.ExprNode(sn.stmt_idx, sn.filename, sn.lineno,
+                exprnode = dfg.ExprNode(sn.line,
                     arg.value if isinstance(arg, astroid.Keyword) else arg)
                 if exprnode in nodes_to_replace:
                     noneconst = make_astroid_node(astroid.Const, value=None)

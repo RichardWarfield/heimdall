@@ -642,19 +642,21 @@ class DataFlowGraph(object):
         """ Return the nodes and edges reached while traversing the graph from start_nodes
         (exclusive) to end_node (inclusive) """
         ret_nodes, ret_edges = set(), set()
+        print "Looking for subgraph_between", start_nodes, end_node
         ret_nodes.add(end_node)
         to_visit = set()
         to_visit.update(start_nodes)
 
         def sg_between_inner(start_node):
             outgoing_edges = self.get_outgoing_edges(start_node)
-            #print "sg_bewteen_inner visiting", start_node, start_node.ast_node.as_string()
+            print "sg_between_inner visiting", start_node, start_node.ast_node.as_string()
             if start_node == end_node:
                 return True
             for e in outgoing_edges:
                 ret_edges.add(e)
                 ret_nodes.add(e.n2)
                 to_visit.add(e.n2)
+            return False
 
 
         found = False
