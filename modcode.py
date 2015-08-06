@@ -181,13 +181,13 @@ def make_modcode_preface(dfg, nodes_to_replace, inp_nodes, in_edges, assumptions
     """ Creates the code (AST statements) to calculate the variables related to the in edges
     and their assumptions, and calculates where the statements should go.
 
-    returns a tuple (preface_stmts, insert_before, source_names, ass_ok_var)
+    returns a tuple (preface_stmts, insert_before, source_names, behavior_var)
 
     - insert_before is a statement (ast node).  We put the preface BEFORE the first statement
     in "nodes to replace", but AFTER any variables involved in the assumptions are defined.
     - source_names is a mapping from dfg nodes (sources of in edges) to variable names
-    - ass_ok_var is the name of the variable we assign the result of the assumption test to
-    (boolean)
+    - behavior_var is the name of the variable we use to determine what to do in later statements
+    (int)
 
     What are the different scenarios for in edges vis a vis assigning expressions to names?
     - It's a variable name - use existing name
@@ -246,16 +246,16 @@ def make_modcode_preface(dfg, nodes_to_replace, inp_nodes, in_edges, assumptions
     #print "Assumptions: ", assumptions
     if len(assumptions) > 0:
         #cprint("Inserting assumption code before stmt %i: %s " % (first_stmt_idx, first_stmt.as_string()), "blue")
-        ass_ok_varname = unique_var('ass_ok')
+        behavior_varname = unique_var('behavior')
         assumption_code = ' and '.join(['('+expr.replace('{1}', source_names[n])+')'
             for (n,expr) in assumptions.iteritems()])
         #cprint ("Assumption code: " + assumption_code, "blue")
-        stmts.append(make_assign_stmt(ass_ok_varname, assumption_code, insert_before.parent))
+        stmts.append(make_assign_stmt(behavior_varname, assumption_code, insert_before.parent))
     else:
-        ass_ok_varname = None
-    return stmts, insert_before, source_names, ass_ok_varname
+        behavior_varname = None
+    return stmts, insert_before, source_names, behavior_varname
 
-def connect_new_code_to_outputs(out_edges, input_nodes, scope_input_names, new_expr, ass_ok_var):
+def connect_new_code_to_outputs(out_edges, input_nodes, scope_input_names, new_expr, behavior_var):
     """
     Change the targets of the out edges to use the new calculation given by new_expr
     """
@@ -277,8 +277,8 @@ def connect_new_code_to_outputs(out_edges, input_nodes, scope_input_names, new_e
         replace_child(e.n1.ast_node.parent, e.n1.ast_node, newexpr_assign)
         # Goes before the first out edge
 
-        local_aov = scope_input_names[(ass_ok_var, stmt_orig.scope())]
-        stmt_orig.parent.body[stmt_loc] = make_if(local_aov,
+        local_bv = scope_input_names[(behavior_var, stmt_orig.scope())]
+        stmt_orig.parent.body[stmt_loc] = make_if(local_bv,
                 stmts_if_true=[stmt_orig], stmts_if_false=[stmt_copy])
 
 
@@ -329,41 +329,43 @@ def replace_subgraph_and_code(dfg, nodes_to_replace, input_nodes, new_expr, assu
 
     # Make the preface, which will ensure the input data is named and will set the variable
     # corresponding to whether or not the assumptions are satisfied.
-    preface_stmts, insert_before, source_names, ass_ok_var = make_modcode_preface(dfg, nodes_to_replace,
+    preface_stmts, insert_before, source_names, behavior_var = make_modcode_preface(dfg, nodes_to_replace,
             input_nodes, in_edges, assumptions)
     assert first_scope == insert_before.scope()
     insert_statements_before(insert_before, preface_stmts)
 
-    statement_nodes = partition(nodes_to_replace, lambda n: get_statement(n.ast_node))
 
     # Keep track of the local name of our input variables in each called scope
     # (may change to prevent conflicts).
     # A map of tuple (node, scope) -> name
+    # TODO: find "synonyms" in other scopes (where e.g. a value is already being passed)
     scope_input_names = {(n,first_scope): source_names[n] for n in input_nodes}
-    scope_input_names[(ass_ok_var, first_scope)] = ass_ok_var
+    scope_input_names[(behavior_var, first_scope)] = behavior_var
 
-    # The main loop.  We go through one (AST) statement at a time, in the order that nodes appear
+    # behavior_ids is a mapping from IntCallFuncNodes to ints, which are used to identify which
+    # behavior should happen in a particular call to a particular function (i.e. what to do at each
+    # guard)
+    behavior_ids = {}
+
+    # The main loop.  We go through one statement at a time, in the order that nodes appear
     # in the DFG (note this is somewhat nondeterminisic).
     to_visit = [e.n2 for e in in_edges]
     done = set()
     while len(to_visit) > 0:
         n = to_visit.pop()
-        stmt = get_statement(n.ast_node)
-        if stmt in done:
+        if n.stmt_idx in done:
             continue
 
-        prepare_statement(stmt, statement_nodes, input_nodes, out_node, scope_input_names,
-                ass_ok_var, nodes_to_replace)
+        prepare_statement(dfg, n, input_nodes, out_node, scope_input_names, behavior_var, nodes_to_replace)
 
-        for sn in statement_nodes[stmt]:
-            for on in dfg.get_outputs(sn):
-                if on in nodes_to_replace:
-                    to_visit.append(on)
+        for on in dfg.get_outputs(n):
+            if on in nodes_to_replace:
+                to_visit.append(on)
 
-        done.add(stmt)
+        done.add(n.stmt_idx)
 
     # Change the targets of the out edges to use the new calculation.
-    connect_new_code_to_outputs(out_edges, input_nodes, scope_input_names, new_expr, ass_ok_var)
+    connect_new_code_to_outputs(out_edges, input_nodes, scope_input_names, new_expr, behavior_var)
 
     # Find all the scopes we need to change
     scopes = partition(nodes_to_replace, lambda n: n.ast_node.scope())
@@ -373,7 +375,7 @@ def replace_subgraph_and_code(dfg, nodes_to_replace, input_nodes, new_expr, assu
             # Add an argument for the assumption ok switch
             assert isinstance(scope, astroid.Function)
 
-            #scope.args.args.append(make_astroid_node(astroid.AssName, name=ass_ok_var,
+            #scope.args.args.append(make_astroid_node(astroid.AssName, name=behavior_var,
                 #parent=scope.args))
             #scope.args.defaults.append(make_astroid_node(astroid.Const, value=False, parent=scope.args))
 
@@ -384,8 +386,7 @@ def replace_subgraph_and_code(dfg, nodes_to_replace, input_nodes, new_expr, assu
         replace_function(scope.name, scope.root().file, scope.as_string())
 
 
-def prepare_statement(stmt, statement_nodes, input_nodes, out_node, scope_input_names,
-        ass_ok_var, nodes_to_replace):
+def prepare_statement(dfg, node, input_nodes, out_node, scope_input_names, behavior_var, nodes_to_replace):
     """
     Alter a statement for an optimized approach to the nodes in nodes_to_replace
     - If there is an internal function call, call prepare_statement_with_internal_calls
@@ -393,33 +394,35 @@ def prepare_statement(stmt, statement_nodes, input_nodes, out_node, scope_input_
     we don't execute if we are in the optimized path
     """
 
-    snodes = statement_nodes[stmt]
+    stmt = get_statement(node.ast_node)
+    stmt_nodes = [n for n in nodes_to_replace if n.stmt_idx == node.stmt_idx]
 
     # Is it an IntCallFuncNode?  Follow with the right information.
     # Is anything in this statement attached to an out edge?  Otherwise we guard around it
     # (track where each window starts/ends)
-    if not any([nd == out_node for nd in statement_nodes[stmt]]):
-        local_aov = scope_input_names[(ass_ok_var, stmt.scope())]
+    if not any([nd == out_node for nd in stmt_nodes[stmt]]):
+        local_bv = scope_input_names[(behavior_var, stmt.scope())]
 
         if isinstance(stmt, astroid.Function):
             # If this is a function definition we don't change it
             pass
-        elif any([isinstance(sn, DataFlowGraph.IntCallFuncNode) for sn in snodes]):
-            newst,origst = prepare_statement_with_internal_calls(dfg, nodes_to_replace, stmt, snodes,
-                input_nodes+[ass_ok_var], scope_input_names)
-            ifo = make_if(make_astroid_node(astroid.Name, name=local_aov), [newst], [origst])
+        elif any([isinstance(sn, DataFlowGraph.IntCallFuncNode) for sn in stmt_nodes]):
+            newst,origst,behavior_ids = prepare_statement_with_internal_calls(dfg, nodes_to_replace, stmt, stmt_nodes,
+                input_nodes, behavior_var, scope_input_names)
+            ifo = make_if(make_astroid_node(astroid.Name, name=local_bv), [newst], [origst])
             stmt.parent.body[stmt.parent.body.index(stmt)] = ifo
-        elif (len(snodes)==1 and isinstance(snodes[0], DataFlowGraph.VarAssignNode)):
+        elif (len(stmt_nodes)==1 and isinstance(stmt_nodes[0], DataFlowGraph.VarAssignNode)):
             # The dfg node is just an assignment, with the actual value outside the graph.
             # Don't guard it (it could be an input we need to check assumptions)
             pass
         else:
             win_start = stmt.parent.body.index(stmt)
             win_end = win_start + 1
-            insert_guards(local_aov, stmt.parent, win_start, win_end)
+            insert_guards(local_bv, stmt.parent, win_start, win_end)
 
 
-def prepare_statement_with_internal_calls(dfg, nodes_to_replace, stmt, snodes, inputs, scope_input_names):
+def prepare_statement_with_internal_calls(dfg, nodes_to_replace, stmt, snodes, inputs, behavior_var,
+        scope_input_names):
     """
     stmt is a statement with one or more IntCallFuncNodes.
     snodes is the list of all nodes relating to this statement.
@@ -429,10 +432,15 @@ def prepare_statement_with_internal_calls(dfg, nodes_to_replace, stmt, snodes, i
     Therefore the only way the functions I'm calling here can
     matter is if they have "side effects" unrelated to the calculation.  That means I just need
     to call these functions in the right order but don't need to worry about the return value.
+
+    returns a tuple (stmt, old_stmt, behavior_ids)
+    behavior_ids is a mapping from IntCallFuncNodes to ints, which are used to identify which
+    guards should be respected in the current call to a function.
     """
     # We operate on the original node and return a copy as the "old statement".
     # Cuz its easier.
     old_stmt = copy_astroid_node(stmt)
+    behavior_ids = {}
     for sn in snodes:
         if isinstance(sn, DataFlowGraph.IntCallFuncNode):
             # Go through the arguments.  Is each argument an intermediate part of the
@@ -453,12 +461,13 @@ def prepare_statement_with_internal_calls(dfg, nodes_to_replace, stmt, snodes, i
                         sn.ast_node.args[i] = noneconst
 
             newscope = sn.func_def
-            ensure_inputs_available(sn, inputs, scope_input_names)
+            behavior_id[sn] = ensure_inputs_available(sn, inputs, behavior_var, scope_input_names)
 
-    return stmt, old_stmt
+    return stmt, old_stmt, behavior_ids
 
+behavior_ctr = 1
 
-def ensure_inputs_available(intcallfunc_n, inputs, scope_input_names):
+def ensure_inputs_available(intcallfunc_n, inputs, behavior_var, scope_input_names):
     """
     Given an IntCallFuncNode:
     1. Add parameters to the function definition that represent the inputs + guard var.
@@ -468,21 +477,34 @@ def ensure_inputs_available(intcallfunc_n, inputs, scope_input_names):
     source_names -- names of the inputs, in the first scope
     local_source_names -- names of the inputs, in the calling scope (where intcallfunc_n is)
     """
+    global behavior_ctr
+
     res = {}
     n = intcallfunc_n
-    for inp in inputs:
-        callername = scope_input_names[(inp, intcallfunc_n.ast_node.scope())]
-        calleename = unique_var(callername)
-        argnamenode = make_astroid_node(astroid.Name, name=callername)
-        n.ast_node.args.append(make_astroid_node(astroid.Keyword,
-            arg=calleename, parent=n.ast_node, value=argnamenode))
-        argnamenode.parent = n.ast_node.args[-1]
+    for inp in inputs+[behavior_var]:
+        if not (inp, n.func_def.scope()) in scope_input_names:
+            callername = scope_input_names[(inp, intcallfunc_n.ast_node.scope())]
+            calleename = unique_var(callername)
+            argnamenode = make_astroid_node(astroid.Name, name=callername)
+            n.ast_node.args.append(make_astroid_node(astroid.Keyword,
+                arg=calleename, parent=n.ast_node, value=argnamenode))
+            argnamenode.parent = n.ast_node.args[-1]
 
-        n.func_def.args.args.append(make_astroid_node(astroid.AssName, name=calleename,
-            parent=n.func_def.args))
-        n.func_def.args.defaults.append(make_astroid_node(astroid.Const, value=None,
-            parent=n.func_def.args))
-        scope_input_names[(inp, n.func_def)] = calleename
+            n.func_def.args.args.append(make_astroid_node(astroid.AssName, name=calleename,
+                parent=n.func_def.args))
+            n.func_def.args.defaults.append(make_astroid_node(astroid.Const, value=None,
+                parent=n.func_def.args))
+            scope_input_names[(inp, n.func_def)] = calleename
+
+    # increment the behavior var value for this call..
+    behavior_varname = scope_input_names[(behavior_var, intcallfunc_n.ast_node.scope())]
+    for arg in n.ast_node.args:
+        if isinstance(arg, astroid.Keyword) and arg.arg==behavior_varname:
+            arg.value = make_astroid_node(astroid.Const, value=behavior_ctr)
+            behavior_ctr += 1
+            return behavior_ctr - 1
+
+    assert False
 
 
 def edit_function(func, module, ln_start, ln_end, newlines):
