@@ -281,70 +281,8 @@ def connect_new_code_to_outputs(out_edges, input_nodes, scope_input_names, new_e
         stmt_orig.parent.body[stmt_loc] = make_if(local_aov,
                 stmts_if_true=[stmt_orig], stmts_if_false=[stmt_copy])
 
-def ensure_inputs_available(intcallfunc_n, inputs, scope_input_names):
-    """
-    Given an IntCallFuncNode:
-    1. Add parameters to the function definition that represent the inputs + guard var.
-    2. Add corresponding arguments to the function call.
-    (if necessary)
-
-    source_names -- names of the inputs, in the first scope
-    local_source_names -- names of the inputs, in the calling scope (where intcallfunc_n is)
-    """
-    res = {}
-    n = intcallfunc_n
-    for inp in inputs:
-        callername = scope_input_names[(inp, intcallfunc_n.ast_node.scope())]
-        calleename = unique_var(callername)
-        argnamenode = make_astroid_node(astroid.Name, name=callername)
-        n.ast_node.args.append(make_astroid_node(astroid.Keyword,
-            arg=calleename, parent=n.ast_node, value=argnamenode))
-        argnamenode.parent = n.ast_node.args[-1]
-
-        n.func_def.args.args.append(make_astroid_node(astroid.AssName, name=calleename,
-            parent=n.func_def.args))
-        n.func_def.args.defaults.append(make_astroid_node(astroid.Const, value=None,
-            parent=n.func_def.args))
-        scope_input_names[(inp, n.func_def)] = calleename
 
 
-def prepare_statement_with_internal_calls(dfg, nodes_to_replace, stmt, snodes, inputs, scope_input_names):
-    """
-    stmt is a statement with one or more IntCallFuncNodes.
-    snodes is the list of all nodes relating to this statement.
-
-    The intermediate values in nodes_to_replace (including the value of this statement, if any)
-    are guaranteed not to used anywhere else but the relevant calculation.
-    Therefore the only way the functions I'm calling here can
-    matter is if they have "side effects" unrelated to the calculation.  That means I just need
-    to call these functions in the right order but don't need to worry about the return value.
-    """
-    # We operate on the original node and return a copy as the "old statement".
-    # Cuz its easier.
-    old_stmt = copy_astroid_node(stmt)
-    for sn in snodes:
-        if isinstance(sn, DataFlowGraph.IntCallFuncNode):
-            # Go through the arguments.  Is each argument an intermediate part of the
-            # calculation or not?  If it is we can just delete it (send None).
-            # Add args to the call
-            for i,arg in enumerate(sn.ast_node.args):
-                exprnode = dfg.ExprNode(sn.line,
-                    arg.value if isinstance(arg, astroid.Keyword) else arg)
-                if exprnode in nodes_to_replace:
-                    noneconst = make_astroid_node(astroid.Const, value=None)
-                    if isinstance(arg, astroid.Keyword):
-                        nonekw = make_astroid_node(astroid.Keyword, arg=arg.arg, value=noneconst,
-                                parent = sn.ast_node.args)
-                        noneconst.parent = nonekw
-                        sn.ast_node.args[i] = nonekw
-                    else:
-                        noneconst.parent=sn.ast_node.args
-                        sn.ast_node.args[i] = noneconst
-
-            newscope = sn.func_def
-            ensure_inputs_available(sn, inputs, scope_input_names)
-
-    return stmt, old_stmt
 
 
 
@@ -414,31 +352,10 @@ def replace_subgraph_and_code(dfg, nodes_to_replace, input_nodes, new_expr, assu
         if stmt in done:
             continue
 
-        snodes = statement_nodes[stmt]
-        # Is it an IntCallFuncNode?  Follow with the right information.
-        # Is anything in this statement attached to an out edge?  Otherwise we guard around it
-        # (track where each window starts/ends)
-        if not any([nd == out_node for nd in statement_nodes[stmt]]):
-            local_aov = scope_input_names[(ass_ok_var, stmt.scope())]
+        prepare_statement(stmt, statement_nodes, input_nodes, out_node, scope_input_names,
+                ass_ok_var, nodes_to_replace)
 
-            if isinstance(stmt, astroid.Function):
-                # If this is a function definition we don't change it
-                pass
-            elif any([isinstance(sn, DataFlowGraph.IntCallFuncNode) for sn in snodes]):
-                newst,origst = prepare_statement_with_internal_calls(dfg, nodes_to_replace, stmt, snodes,
-                    input_nodes+[ass_ok_var], scope_input_names)
-                ifo = make_if(make_astroid_node(astroid.Name, name=local_aov), [newst], [origst])
-                stmt.parent.body[stmt.parent.body.index(stmt)] = ifo
-            elif (len(snodes)==1 and isinstance(snodes[0], DataFlowGraph.VarAssignNode)):
-                # The dfg node is just an assignment, with the actual value outside the graph.
-                # Don't guard it (it could be an input we need to check assumptions)
-                pass
-            else:
-                win_start = stmt.parent.body.index(stmt)
-                win_end = win_start + 1
-                insert_guards(local_aov, stmt.parent, win_start, win_end)
-
-        for sn in snodes:
+        for sn in statement_nodes[stmt]:
             for on in dfg.get_outputs(sn):
                 if on in nodes_to_replace:
                     to_visit.append(on)
@@ -467,6 +384,105 @@ def replace_subgraph_and_code(dfg, nodes_to_replace, input_nodes, new_expr, assu
         replace_function(scope.name, scope.root().file, scope.as_string())
 
 
+def prepare_statement(stmt, statement_nodes, input_nodes, out_node, scope_input_names,
+        ass_ok_var, nodes_to_replace):
+    """
+    Alter a statement for an optimized approach to the nodes in nodes_to_replace
+    - If there is an internal function call, call prepare_statement_with_internal_calls
+    - Otherwise, if this is a "normal" statement executed along the original path, guard it so
+    we don't execute if we are in the optimized path
+    """
+
+    snodes = statement_nodes[stmt]
+
+    # Is it an IntCallFuncNode?  Follow with the right information.
+    # Is anything in this statement attached to an out edge?  Otherwise we guard around it
+    # (track where each window starts/ends)
+    if not any([nd == out_node for nd in statement_nodes[stmt]]):
+        local_aov = scope_input_names[(ass_ok_var, stmt.scope())]
+
+        if isinstance(stmt, astroid.Function):
+            # If this is a function definition we don't change it
+            pass
+        elif any([isinstance(sn, DataFlowGraph.IntCallFuncNode) for sn in snodes]):
+            newst,origst = prepare_statement_with_internal_calls(dfg, nodes_to_replace, stmt, snodes,
+                input_nodes+[ass_ok_var], scope_input_names)
+            ifo = make_if(make_astroid_node(astroid.Name, name=local_aov), [newst], [origst])
+            stmt.parent.body[stmt.parent.body.index(stmt)] = ifo
+        elif (len(snodes)==1 and isinstance(snodes[0], DataFlowGraph.VarAssignNode)):
+            # The dfg node is just an assignment, with the actual value outside the graph.
+            # Don't guard it (it could be an input we need to check assumptions)
+            pass
+        else:
+            win_start = stmt.parent.body.index(stmt)
+            win_end = win_start + 1
+            insert_guards(local_aov, stmt.parent, win_start, win_end)
+
+
+def prepare_statement_with_internal_calls(dfg, nodes_to_replace, stmt, snodes, inputs, scope_input_names):
+    """
+    stmt is a statement with one or more IntCallFuncNodes.
+    snodes is the list of all nodes relating to this statement.
+
+    The intermediate values in nodes_to_replace (including the value of this statement, if any)
+    are guaranteed not to be used anywhere else but the relevant calculation.
+    Therefore the only way the functions I'm calling here can
+    matter is if they have "side effects" unrelated to the calculation.  That means I just need
+    to call these functions in the right order but don't need to worry about the return value.
+    """
+    # We operate on the original node and return a copy as the "old statement".
+    # Cuz its easier.
+    old_stmt = copy_astroid_node(stmt)
+    for sn in snodes:
+        if isinstance(sn, DataFlowGraph.IntCallFuncNode):
+            # Go through the arguments.  Is each argument an intermediate part of the
+            # calculation or not?  If it is we can just delete it (send None).
+            # Add args to the call
+            for i,arg in enumerate(sn.ast_node.args):
+                exprnode = dfg.ExprNode(sn.line,
+                    arg.value if isinstance(arg, astroid.Keyword) else arg)
+                if exprnode in nodes_to_replace:
+                    noneconst = make_astroid_node(astroid.Const, value=None)
+                    if isinstance(arg, astroid.Keyword):
+                        nonekw = make_astroid_node(astroid.Keyword, arg=arg.arg, value=noneconst,
+                                parent = sn.ast_node.args)
+                        noneconst.parent = nonekw
+                        sn.ast_node.args[i] = nonekw
+                    else:
+                        noneconst.parent=sn.ast_node.args
+                        sn.ast_node.args[i] = noneconst
+
+            newscope = sn.func_def
+            ensure_inputs_available(sn, inputs, scope_input_names)
+
+    return stmt, old_stmt
+
+
+def ensure_inputs_available(intcallfunc_n, inputs, scope_input_names):
+    """
+    Given an IntCallFuncNode:
+    1. Add parameters to the function definition that represent the inputs + guard var.
+    2. Add corresponding arguments to the function call.
+    (if necessary)
+
+    source_names -- names of the inputs, in the first scope
+    local_source_names -- names of the inputs, in the calling scope (where intcallfunc_n is)
+    """
+    res = {}
+    n = intcallfunc_n
+    for inp in inputs:
+        callername = scope_input_names[(inp, intcallfunc_n.ast_node.scope())]
+        calleename = unique_var(callername)
+        argnamenode = make_astroid_node(astroid.Name, name=callername)
+        n.ast_node.args.append(make_astroid_node(astroid.Keyword,
+            arg=calleename, parent=n.ast_node, value=argnamenode))
+        argnamenode.parent = n.ast_node.args[-1]
+
+        n.func_def.args.args.append(make_astroid_node(astroid.AssName, name=calleename,
+            parent=n.func_def.args))
+        n.func_def.args.defaults.append(make_astroid_node(astroid.Const, value=None,
+            parent=n.func_def.args))
+        scope_input_names[(inp, n.func_def)] = calleename
 
 
 def edit_function(func, module, ln_start, ln_end, newlines):
