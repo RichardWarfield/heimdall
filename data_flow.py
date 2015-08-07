@@ -143,11 +143,11 @@ def follow_statements_until_return(dfg, stmt_sequence, start_idx, line_to_asts, 
                             filenames, line_to_asts, local_assignments)
 
                 # fncalls should be in precisely the order that we will call from here.
-                for fcall in fncalls:
+                for (line_call_order, fcall) in enumerate(fncalls):
                     func_def = get_func_def(fcall, filenames, st)
                     if func_def is not None:
-                        stmt_idx = follow_function_call(dfg, fcall, func_def, line,
-                                stmt_sequence, line_to_asts, filenames, local_assignments)
+                        stmt_idx = follow_function_call(dfg, fcall, func_def, line, stmt_sequence,
+                                line_to_asts, filenames, local_assignments, line_call_order)
 
 
         # XXX If we are on a return statement with a function call in the value, we will not
@@ -210,7 +210,7 @@ def process_variable_dependency(dfg, stmt_sequence, st, var, line, filenames, li
 
 
 def follow_function_call(dfg, fcall, func_def, line, stmt_sequence, line_to_asts, filenames,
-        local_assignments):
+        local_assignments, line_call_order):
     """
     1. Add the edges for passing arguments;
     2. Recursively call follow_statements_until_return;
@@ -224,7 +224,7 @@ def follow_function_call(dfg, fcall, func_def, line, stmt_sequence, line_to_asts
     """
 
     callee_line = LineExec(line.stmt_idx+1, os.path.abspath(func_def.root().file), func_def.lineno)
-    arg_assignments = dfg.add_internal_call(line, callee_line, fcall, func_def)
+    arg_assignments = dfg.add_internal_call(line, callee_line, fcall, func_def, line_call_order)
 
     stmt_idx_start = line.stmt_idx
     #print "*** Recursing at", st.as_string()
@@ -466,18 +466,21 @@ class DataFlowGraph(object):
             self.edges.add(e)
 
 
-    def add_internal_call(self, caller_line, callee_line, fcall, func_def):
+    def add_internal_call(self, caller_line, callee_line, fcall, func_def, line_call_order):
         """
         Create an IntCallFuncNode and the associated arg passing edges.
 
         stmt_idx for the arg pass edge.n2 corresponds to the function definition
         line.
+        line_call_order tells us the sequence of this internal call in the line
+        (in 0 ... num internal calls on the line)
         """
         # We need an edge for each value passed.  Furthermore -- we need a "dummy"
         # node to represent each argument
         func_args = match_callfunc_args(fcall, func_def)
 
         callnode = DataFlowGraph.IntCallFuncNode(caller_line, fcall)
+        callnode.line_call_order = line_call_order
         # Mapping of assignment node -> value node where each is a self node
         callnode.arg_val_map = {}
         callnode.func_def = func_def
