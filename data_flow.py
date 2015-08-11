@@ -83,7 +83,7 @@ def analyze_flow(stmt_sequence):
 
     dfg = DataFlowGraph()
 
-    stmt, nstmts = follow_statements_until_return(dfg, stmt_sequence, 0, line_to_asts, filenames, {})
+    stmt, nstmts = follow_statements_until_return(dfg, stmt_sequence, 0, line_to_asts, filenames, None, {})
     terminal_nodes = dfg.terminal_nodes()
     for tn in terminal_nodes:
         if not tn.ast_node.is_statement:
@@ -100,7 +100,7 @@ def analyze_flow(stmt_sequence):
 
 
 def follow_statements_until_return(dfg, stmt_sequence, start_idx, line_to_asts, filenames,
-        arg_assignments):
+        call_context, arg_assignments):
     lastplace = ()
     local_assignments = arg_assignments
     # Get variable dependencies
@@ -135,19 +135,19 @@ def follow_statements_until_return(dfg, stmt_sequence, start_idx, line_to_asts, 
                     # Make a node for each variable we assign
                     for target in st.targets:
                         if not (type(st.value) is astroid.CallFunc and get_func_def(st.value, filenames, st) is not None):
-                            e = dfg.add_assign_edge(line, target, st.value)
+                            e = dfg.add_assign_edge(line, call_context, target, st.value)
                             local_assignments[e.label] = e
 
                 for var in vardeps:
                     process_variable_dependency(dfg, stmt_sequence, st, var, line,
-                            filenames, line_to_asts, local_assignments)
+                            filenames, line_to_asts, local_assignments, call_context)
 
                 # fncalls should be in precisely the order that we will call from here.
                 for (line_call_order, fcall) in enumerate(fncalls):
                     func_def = get_func_def(fcall, filenames, st)
                     if func_def is not None:
                         stmt_idx = follow_function_call(dfg, fcall, func_def, line, stmt_sequence,
-                                line_to_asts, filenames, local_assignments, line_call_order)
+                                line_to_asts, filenames, local_assignments, line_call_order, call_context)
 
 
         # XXX If we are on a return statement with a function call in the value, we will not
@@ -167,7 +167,7 @@ def follow_statements_until_return(dfg, stmt_sequence, start_idx, line_to_asts, 
     return None, stmt_idx-start_idx+1
 
 
-def process_variable_dependency(dfg, stmt_sequence, st, var, line, filenames, line_to_asts, local_assignments):
+def process_variable_dependency(dfg, stmt_sequence, st, var, line, filenames, line_to_asts, local_assignments, call_context):
     """
     Make the subgraph related to the use of var (an astroid.Name).
     - Assign node and edge to here
@@ -177,7 +177,7 @@ def process_variable_dependency(dfg, stmt_sequence, st, var, line, filenames, li
 
     if var.name in local_assignments:
         ass_edge = local_assignments[var.name]
-        dfg.add_assign_use_edge(ass_edge.n2.line, line, ass_edge.n2.ast_node, var)
+        dfg.add_assign_use_edge(ass_edge.n2.line, line, call_context, ass_edge.n2.ast_node, var)
     resolved_internally = False
     asmts = get_enclosing_scope(st).lookup(var.name)[1]
     for asmt in asmts:
@@ -195,9 +195,9 @@ def process_variable_dependency(dfg, stmt_sequence, st, var, line, filenames, li
                     func_call_parent = get_func_for_arg(pst)
                     if (func_call_parent is not None
                             and get_func_def(func_call_parent, filenames,st) is None):
-                        dfg.add_external_call(line, func_call_parent)
+                        dfg.add_external_call(line, call_context, func_call_parent)
                     else:
-                        dfg.add_composition_edge(line, pst, pst.parent)
+                        dfg.add_composition_edge(line, call_context, pst, pst.parent)
                     pst = pst.parent
 
         # A var dependency is internal if it is assigned somewhere in our statement list,
@@ -210,7 +210,7 @@ def process_variable_dependency(dfg, stmt_sequence, st, var, line, filenames, li
 
 
 def follow_function_call(dfg, fcall, func_def, line, stmt_sequence, line_to_asts, filenames,
-        local_assignments, line_call_order):
+        local_assignments, line_call_order, call_context):
     """
     1. Add the edges for passing arguments;
     2. Recursively call follow_statements_until_return;
@@ -224,12 +224,13 @@ def follow_function_call(dfg, fcall, func_def, line, stmt_sequence, line_to_asts
     """
 
     callee_line = LineExec(line.stmt_idx+1, os.path.abspath(func_def.root().file), func_def.lineno)
-    arg_assignments = dfg.add_internal_call(line, callee_line, fcall, func_def, line_call_order)
+    callnode, arg_assignments = dfg.add_internal_call(line, callee_line, call_context,
+            fcall, func_def, line_call_order)
 
     stmt_idx_start = line.stmt_idx
     #print "*** Recursing at", st.as_string()
     ret_ast_node, stmt_incr = follow_statements_until_return(dfg, stmt_sequence,
-            line.stmt_idx+1, line_to_asts, filenames, arg_assignments)
+            line.stmt_idx+1, line_to_asts, filenames, callnode, arg_assignments )
     stmt_idx = stmt_idx_start + stmt_incr
 
     # Add edge if we just returned from a function
@@ -242,12 +243,12 @@ def follow_function_call(dfg, fcall, func_def, line, stmt_sequence, line_to_asts
         to_line = LineExec(stmt_idx_start, line.filename, line.lineno)
         if type(ret_to) is astroid.Assign:
             for t in ret_to.targets:
-                e = dfg.add_return_edge(from_line, to_line, ret_ast_node, t)
+                e = dfg.add_return_edge(from_line, to_line, callnode, call_context, ret_ast_node, t)
                 local_assignments[t.name] = e
         elif type(ret_to) is astroid.Discard:
             pass
         else:
-            dfg.add_return_edge(from_line, to_line, ret_ast_node, ret_to)
+            dfg.add_return_edge(from_line, to_line, callnode, call_context, ret_ast_node, ret_to)
 
     return stmt_idx
 
@@ -333,9 +334,9 @@ def match_callfunc_args(call_node, def_node):
 
 class DataFlowGraph(object):
     class Node(object):
-        def __init__(self, line, ast_node):
+        def __init__(self, line, ast_node, call_context):
             assert isinstance(ast_node, astroid.node_classes.NodeNG)
-            self.line, self.ast_node = line, ast_node
+            self.line, self.ast_node, self.call_context = line, ast_node, call_context
         def __hash__(self):
             return hash((self.line, self.ast_node))
         def __eq__(self, other):
@@ -404,29 +405,29 @@ class DataFlowGraph(object):
         self.nodes = set()
         self.external_deps = {}
 
-    def add_assign_edge(self, line, assname_node, val_node):
+    def add_assign_edge(self, line, call_context, assname_node, val_node):
         # First node the the expression we are assigning to the variable
-        n1 = self.ExprNode(line, val_node)
-        n2 = self.VarAssignNode(line, assname_node)
+        n1 = self.ExprNode(line, val_node, call_context)
+        n2 = self.VarAssignNode(line, assname_node, call_context)
         self.nodes.add(n1)
         self.nodes.add(n2)
         e = self.AssignEdge(n1, n2, assname_node.name)
         self.edges.add(e)
         return e
 
-    def add_assign_use_edge(self, asmt_line, use_line, asmt_node, use_node):
-        n1 = self.VarAssignNode(asmt_line, asmt_node)
-        n2 = self.ExprNode(use_line, use_node)
+    def add_assign_use_edge(self, asmt_line, use_line, call_context, asmt_node, use_node):
+        n1 = self.VarAssignNode(asmt_line, asmt_node, call_context)
+        n2 = self.ExprNode(use_line, use_node, call_context)
         self.nodes.add(n1)
         self.nodes.add(n2)
         e = self.AssignUseEdge(n1, n2, use_node.name)
         self.edges.add(e)
         return e
 
-    def add_composition_edge(self, line, used_node, using_node):
+    def add_composition_edge(self, line, call_context, used_node, using_node):
 
-        n1 = self.ExprNode(line, used_node)
-        n2 = self.ExprNode(line, using_node)
+        n1 = self.ExprNode(line, used_node, call_context)
+        n2 = self.ExprNode(line, using_node, call_context)
         self.nodes.add(n1)
         self.nodes.add(n2)
         e = self.CompositionEdge(n1, n2, "(comp)")
@@ -442,9 +443,9 @@ class DataFlowGraph(object):
     #    e = self.CallFuncEdge(n1, n2, func_node.name)
     #    self.edges.add(e)
 
-    def add_external_call(self, line, callfunc_ast_node):
+    def add_external_call(self, line, call_context, callfunc_ast_node):
         #cprint("adding external callfunc node %s" % callfunc_ast_node.as_string(), 'red')
-        callnode = self.ExtCallNode(line, callfunc_ast_node)
+        callnode = self.ExtCallNode(line, callfunc_ast_node, call_context)
         # Remove if present
         # XXX OMG this is a mess!
         if callnode in self.nodes:
@@ -455,18 +456,18 @@ class DataFlowGraph(object):
         self.nodes.add(callnode)
         for (pos,a) in enumerate(callfunc_ast_node.args):
             if isinstance(a, astroid.Keyword):
-                argnode = self.ExprNode(line, a.value)
+                argnode = self.ExprNode(line, a.value, call_context)
                 e = self.CompositionEdge(argnode, callnode, a.arg)
                 e.keyword = a.arg
             else:
-                argnode = self.ExprNode(line, a)
+                argnode = self.ExprNode(line, a, call_context)
                 e = self.CompositionEdge(argnode, callnode, str(pos))
                 e.argpos = pos
             self.nodes.add(argnode)
             self.edges.add(e)
 
 
-    def add_internal_call(self, caller_line, callee_line, fcall, func_def, line_call_order):
+    def add_internal_call(self, caller_line, callee_line, call_context, fcall, func_def, line_call_order):
         """
         Create an IntCallFuncNode and the associated arg passing edges.
 
@@ -479,7 +480,7 @@ class DataFlowGraph(object):
         # node to represent each argument
         func_args = match_callfunc_args(fcall, func_def)
 
-        callnode = DataFlowGraph.IntCallFuncNode(caller_line, fcall)
+        callnode = DataFlowGraph.IntCallFuncNode(caller_line, fcall, call_context)
         callnode.line_call_order = line_call_order
         # Mapping of assignment node -> value node where each is a self node
         callnode.arg_val_map = {}
@@ -495,17 +496,17 @@ class DataFlowGraph(object):
         for a in func_args:
             e = self.add_arg_pass_edge(callee_line, callnode, func_def, a)
             arg_assignments[a[0].name] = e
-            valnode = self.ExprNode(caller_line, a[1])
+            valnode = self.ExprNode(caller_line, a[1], call_context)
             callnode.arg_val_map[e.n2] = valnode
-        return arg_assignments
+        return callnode, arg_assignments
 
 
-    def add_return_edge(self, from_line, to_line, ret_node, ret_to_node):
-        n1 = self.ExprNode(from_line, ret_node.value)
+    def add_return_edge(self, from_line, to_line, from_call_context, to_call_context, ret_node, ret_to_node):
+        n1 = self.ExprNode(from_line, ret_node.value, from_call_context)
         if isinstance(ret_to_node, astroid.AssName):
-            n2 = self.VarAssignNode(to_line, ret_to_node)
+            n2 = self.VarAssignNode(to_line, ret_to_node, to_call_context)
         else:
-            n2 = self.Node(to_line, ret_to_node)
+            n2 = self.Node(to_line, ret_to_node, to_call_context)
         self.nodes.add(n1)
         self.nodes.add(n2)
         e = self.ReturnEdge(n1, n2, '(return)')
@@ -515,7 +516,7 @@ class DataFlowGraph(object):
     def add_arg_pass_edge(self, callee_line, intcallfuncnode, func_def, arg):
         # arg: a pair (assignment, value) where assignment is an AssName node.
         #print "Passing ", arg
-        n2 = self.VarAssignNode(callee_line, arg[0])
+        n2 = self.VarAssignNode(callee_line, arg[0], intcallfuncnode)
         self.nodes.add(n2)
         e = self.ArgPassEdge(intcallfuncnode, n2, arg[0].name)
         self.edges.add(e)
@@ -528,7 +529,7 @@ class DataFlowGraph(object):
         # TODO: this assert really should be here
         #assert isinstance(final_ast.parent, astroid.Discard) or isinstance(final_ast.parent, astroid.Return)
         n2 = self.TerminalNode(LineExec(None, final_ast.parent.root().file, final_ast.parent.lineno),
-                final_ast.parent)
+                final_ast.parent, None)
         self.nodes.add(n2)
         e = self.Edge(final_node, n2, 'terminal')
         self.edges.add(e)
@@ -652,7 +653,7 @@ class DataFlowGraph(object):
 
         def sg_between_inner(start_node):
             outgoing_edges = self.get_outgoing_edges(start_node)
-            print "sg_between_inner visiting", start_node, start_node.ast_node.as_string()
+            #print "sg_between_inner visiting", start_node, start_node.ast_node.as_string()
             if start_node == end_node:
                 return True
             for e in outgoing_edges:
@@ -665,7 +666,7 @@ class DataFlowGraph(object):
         found = False
         while len(to_visit) > 0:
             sn = to_visit.pop()
-            found = found or sg_between_inner(sn)
+            found = sg_between_inner(sn) or found
 
         assert found, "Reached end of graph without seeing end node %s"%str(end_node)
 
@@ -729,7 +730,7 @@ class DataFlowGraph(object):
             for n in self.nodes:
                 if n.line.stmt_idx == i:
                     subgraph.node(str(n), tooltip=str((n.__class__.__name__, n.line,
-                        n.ast_node.as_string())), color=colors.get(n,'black'))
+                        n.ast_node.as_string(), n.call_context)), color=colors.get(n,'black'))
                     done.add(n)
             dfd.subgraph(subgraph)
 

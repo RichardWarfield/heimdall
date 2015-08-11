@@ -9,10 +9,10 @@ def g(n):
         print "g iter %i Took %f seconds, sum is %f" %(i, time.time() - t, x.sum())
     print x.shape
 
-def jfunc(rng, a,b):
+def jfunc(rng, a ,b):
     return rng.uniform(size=(a,b))
 
-def kfunc(rng, b,c):
+def kfunc(rng, b, c):
     return rng.uniform(size=(b,c))
 
 def f1(a,b,c,d):
