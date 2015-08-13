@@ -454,9 +454,9 @@ def prepare_statement(dfg, node, input_nodes, out_node, scope_input_names, behav
             # If this is a function definition we don't change it
             pass
         elif any([isinstance(sn, DataFlowGraph.IntCallFuncNode) for sn in stmt_nodes]):
-            newst,origst= prepare_statement_with_internal_calls(dfg, nodes_to_replace, stmt, stmt_nodes,
+            newst = prepare_statement_with_internal_calls(dfg, nodes_to_replace, stmt, stmt_nodes,
                 input_nodes, behavior_var, behavior_ids, scope_input_names)
-            update_guards(guards, stmt, local_bv, behavior_ids[node.call_context], [newst], [origst])
+            update_guards(guards, stmt, local_bv, behavior_ids[node.call_context], newst, [stmt])
         elif (len(stmt_nodes)==1 and isinstance(stmt_nodes[0], DataFlowGraph.VarAssignNode)):
             # The dfg node is just an assignment, with the actual value outside the graph.
             # Don't guard it (it could be an input we need to check assumptions)
@@ -503,48 +503,69 @@ def prepare_statement_with_internal_calls(dfg, nodes_to_replace, stmt, snodes, i
     stmt is a statement with one or more IntCallFuncNodes.
     snodes is the list of all nodes relating to this statement.
 
+    For each internal function call in the statement:
+    1. Replace each argument with None, if that argument is part of the nodes_to_replace and does
+    not itself contain an internal function call (!!!)
+    2. Call ensure_inputs_available to add needed arguments and parameters to carry inputs (plus
+    the behavior var) to the new expression downwards.
+
     The intermediate values in nodes_to_replace (including the value of this statement, if any)
     are guaranteed not to be used anywhere else but the relevant calculation.
     Therefore the only way the functions I'm calling here can
     matter is if they have "side effects" unrelated to the calculation.  That means I just need
     to call these functions in the right order but don't need to worry about the return value.
 
-    returns a tuple (stmt, old_stmt, behavior_ids)
+    returns the new statement
     behavior_ids is a mapping from IntCallFuncNodes to ints, which are used to identify which
     guards should be respected in the current call to a function.
     """
-    # We operate on the original node and return a copy as the "old statement".
-    # Cuz its easier.
-    old_stmt = copy_astroid_node(stmt)
-    for sn in snodes:
-        if isinstance(sn, DataFlowGraph.IntCallFuncNode):
-            # Go through the arguments.  Is each argument an intermediate part of the
-            # calculation or not?  If it is we can just delete it (send None).
-            # Add args to the call
-            for i,arg in enumerate(sn.ast_node.args):
-                # TODO: make it so I don't actually have to create a node just to check if is
-                # is present..
-                exprnode = dfg.ExprNode(sn.line,
-                    arg.value if isinstance(arg, astroid.Keyword) else arg, sn.call_context)
-                if exprnode in nodes_to_replace:
-                    noneconst = make_astroid_node(astroid.Const, value=None)
-                    if isinstance(arg, astroid.Keyword):
-                        nonekw = make_astroid_node(astroid.Keyword, arg=arg.arg, value=noneconst,
-                                parent = sn.ast_node.args)
-                        noneconst.parent = nonekw
-                        sn.ast_node.args[i] = nonekw
-                    else:
-                        noneconst.parent=sn.ast_node.args
-                        sn.ast_node.args[i] = noneconst
+    def strip_prep_callfunc(intcall, new_callfunc):
+        """ Set args to none except those carrying the inputs and behavior var """
+        for i,arg in enumerate(intcall.ast_node.args):
+            # TODO: make it so I don't actually have to create a node just to check if is
+            # is present..
+            exprnode = dfg.ExprNode(intcall.line,
+                arg.value if isinstance(arg, astroid.Keyword) else arg, intcall.call_context)
+            if exprnode in nodes_to_replace:
+                noneconst = make_astroid_node(astroid.Const, value=None)
+                if isinstance(arg, astroid.Keyword):
+                    nonekw = make_astroid_node(astroid.Keyword, arg=arg.arg, value=noneconst,
+                            parent=new_callfunc.args)
+                    noneconst.parent = nonekw
+                    new_callfunc.args[i] = nonekw
+                else:
+                    noneconst.parent=new_callfunc.args
+                    new_callfunc.args[i] = noneconst
 
-            newscope = sn.func_def
-            behavior_ids[sn] = ensure_inputs_available(sn, inputs, behavior_var, scope_input_names)
+        newscope = intcall.func_def
+        behavior_ids[intcall] = ensure_inputs_available(new_callfunc, intcall.func_def, inputs, behavior_var,
+                scope_input_names)
 
-    return stmt, old_stmt
+
+    stmt_copy = copy_astroid_node(stmt)
+    ordered_calls = sorted([sn for sn in snodes if isinstance(sn, DataFlowGraph.IntCallFuncNode)],
+            key=lambda x: x.line_call_order)
+    res = []
+    # Call the internal call funcs in order.  Return if necessary.  Ignore everything else.
+    # I think this logic is ok...
+    for sn in ordered_calls:
+        path = ast_path_to_descendent(stmt, sn.ast_node)
+        new_callfunc = ast_follow_path(stmt_copy, path)
+        strip_prep_callfunc(sn, new_callfunc)
+        if isinstance(sn.ast_node.parent, astroid.Return):
+            res.append(make_astroid_node(astroid.Return, value=new_callfunc, parent=stmt.parent))
+        else:
+            res.append(make_astroid_node(astroid.Discard, value=new_callfunc, parent=stmt.parent))
+
+        # Go through the arguments.  Is each argument an intermediate part of the
+        # calculation or not?  If it is we can just delete it (send None).
+        # Add args to the call
+
+    return res
 
 behavior_ctr = 1
 
-def ensure_inputs_available(intcallfunc_n, inputs, behavior_var, scope_input_names):
+def ensure_inputs_available(callfunc, func_def, inputs, behavior_var, scope_input_names):
     """
     Given an IntCallFuncNode:
     1. Add parameters to the function definition that represent the inputs + behavior var.
@@ -556,30 +577,29 @@ def ensure_inputs_available(intcallfunc_n, inputs, behavior_var, scope_input_nam
     """
     global behavior_ctr
 
-    n = intcallfunc_n
     for inp in inputs+[behavior_var]:
-        callername = scope_input_names[(inp, intcallfunc_n.ast_node.scope())]
-        if not (inp, n.func_def) in scope_input_names:
+        callername = scope_input_names[(inp, callfunc.scope())]
+        if not (inp, func_def) in scope_input_names:
             calleename = unique_var(callername)
-            n.func_def.args.args.append(make_astroid_node(astroid.AssName, name=calleename,
-                parent=n.func_def.args))
-            n.func_def.args.defaults.append(make_astroid_node(astroid.Const, value=None,
-                parent=n.func_def.args))
+            func_def.args.args.append(make_astroid_node(astroid.AssName, name=calleename,
+                parent=func_def.args))
+            func_def.args.defaults.append(make_astroid_node(astroid.Const, value=None,
+                parent=func_def.args))
         else:
-            calleename = scope_input_names[(inp, n.func_def)]
+            calleename = scope_input_names[(inp, func_def)]
 
-        scope_input_names[(inp, n.func_def)] = calleename
+        scope_input_names[(inp, func_def)] = calleename
         argnamenode = make_astroid_node(astroid.Name, name=callername)
-        n.ast_node.args.append(make_astroid_node(astroid.Keyword, arg=calleename,
-            parent=n.ast_node, value=argnamenode))
-        argnamenode.parent = n.ast_node.args[-1]
+        callfunc.args.append(make_astroid_node(astroid.Keyword, arg=calleename,
+            parent=callfunc, value=argnamenode))
+        argnamenode.parent = callfunc.args[-1]
 
 
-    behavior_var_callee_name = scope_input_names[(inp, n.func_def)]
+    behavior_var_callee_name = scope_input_names[(inp, func_def)]
 
     # increment the behavior var value for this call..
-    behavior_varname = scope_input_names[(behavior_var, intcallfunc_n.ast_node.scope())]
-    for arg in n.ast_node.args:
+    behavior_varname = scope_input_names[(behavior_var, callfunc.scope())]
+    for arg in callfunc.args:
         if isinstance(arg, astroid.Keyword) and arg.arg==behavior_var_callee_name:
             behavior_ctr += 1
             arg.value = make_astroid_node(astroid.Const, value=behavior_ctr)

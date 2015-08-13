@@ -16,7 +16,6 @@ THINGS I NEED TO THINK MORE CAREFULLY ABOUT:
     - Multi statement lines (with semicolon)
     - Multiline statements
     - Comprehensions (mini-scope)
-    - Multiple calls to same function (need to distinguish)
     - Loops
 
     - What data, exactly, to save..?
@@ -146,12 +145,11 @@ def follow_statements_until_return(dfg, stmt_sequence, start_idx, line_to_asts, 
                 for (line_call_order, fcall) in enumerate(fncalls):
                     func_def = get_func_def(fcall, filenames, st)
                     if func_def is not None:
-                        stmt_idx = follow_function_call(dfg, fcall, func_def, line, stmt_sequence,
+                        print "Going to follow_function_call: ", fcall.as_string(), 'stmt is ', stmt_idx
+                        stmt_idx = follow_function_call(dfg, fcall, func_def, line, stmt_idx+1, stmt_sequence,
                                 line_to_asts, filenames, local_assignments, line_call_order, call_context)
 
 
-        # XXX If we are on a return statement with a function call in the value, we will not
-        # be returning just yet...
         elif event == 'return':
             assert isinstance(st, astroid.Return)
             #print "*** Returning from ", st.as_string()
@@ -196,6 +194,9 @@ def process_variable_dependency(dfg, stmt_sequence, st, var, line, filenames, li
                     if (func_call_parent is not None
                             and get_func_def(func_call_parent, filenames,st) is None):
                         dfg.add_external_call(line, call_context, func_call_parent)
+                    elif isinstance(pst, astroid.CallFunc) and get_func_def(pst, filenames,st) is not None:
+                        # If this an an internal function call we will handle the return edge separately
+                        pass
                     else:
                         dfg.add_composition_edge(line, call_context, pst, pst.parent)
                     pst = pst.parent
@@ -209,7 +210,7 @@ def process_variable_dependency(dfg, stmt_sequence, st, var, line, filenames, li
         dfg.add_external_dep(var.name, line, var)
 
 
-def follow_function_call(dfg, fcall, func_def, line, stmt_sequence, line_to_asts, filenames,
+def follow_function_call(dfg, fcall, func_def, line, next_stmt_idx, stmt_sequence, line_to_asts, filenames,
         local_assignments, line_call_order, call_context):
     """
     1. Add the edges for passing arguments;
@@ -223,15 +224,15 @@ def follow_function_call(dfg, fcall, func_def, line, stmt_sequence, line_to_asts
     one in edge and one out edge for each argument.
     """
 
-    callee_line = LineExec(line.stmt_idx+1, os.path.abspath(func_def.root().file), func_def.lineno)
+    callee_line = LineExec(next_stmt_idx, os.path.abspath(func_def.root().file), func_def.lineno)
     callnode, arg_assignments = dfg.add_internal_call(line, callee_line, call_context,
             fcall, func_def, line_call_order)
 
-    stmt_idx_start = line.stmt_idx
+    stmt_idx_start = next_stmt_idx
     #print "*** Recursing at", st.as_string()
     ret_ast_node, stmt_incr = follow_statements_until_return(dfg, stmt_sequence,
-            line.stmt_idx+1, line_to_asts, filenames, callnode, arg_assignments )
-    stmt_idx = stmt_idx_start + stmt_incr
+            next_stmt_idx, line_to_asts, filenames, callnode, arg_assignments )
+    stmt_idx = stmt_idx_start + stmt_incr - 1
 
     # Add edge if we just returned from a function
         #print "Returning to %s from %s" % (ret_to.as_string(), str(return_from))
@@ -240,7 +241,7 @@ def follow_function_call(dfg, fcall, func_def, line, stmt_sequence, line_to_asts
         ret_to = fcall.parent
         # Subtract 1 here so we get the "line" statment, not "return"
         from_line = LineExec(stmt_idx-1, ret_ast_node.root().file, ret_ast_node.lineno)
-        to_line = LineExec(stmt_idx_start, line.filename, line.lineno)
+        to_line = LineExec(stmt_idx_start-1, line.filename, line.lineno)
         if type(ret_to) is astroid.Assign:
             for t in ret_to.targets:
                 e = dfg.add_return_edge(from_line, to_line, callnode, call_context, ret_ast_node, t)
@@ -248,8 +249,9 @@ def follow_function_call(dfg, fcall, func_def, line, stmt_sequence, line_to_asts
         elif type(ret_to) is astroid.Discard:
             pass
         else:
-            dfg.add_return_edge(from_line, to_line, callnode, call_context, ret_ast_node, ret_to)
+            e = dfg.add_return_edge(from_line, to_line, callnode, call_context, ret_ast_node, ret_to)
 
+    callnode.return_value_node = dfg.find_node(from_line, ret_ast_node.value)
     return stmt_idx
 
 
@@ -476,8 +478,7 @@ class DataFlowGraph(object):
         line_call_order tells us the sequence of this internal call in the line
         (in 0 ... num internal calls on the line)
         """
-        # We need an edge for each value passed.  Furthermore -- we need a "dummy"
-        # node to represent each argument
+        # a pair (assignment, value) where assignment is an AssName node.
         func_args = match_callfunc_args(fcall, func_def)
 
         callnode = DataFlowGraph.IntCallFuncNode(caller_line, fcall, call_context)
@@ -492,12 +493,14 @@ class DataFlowGraph(object):
                 if e.n1 == callnode: e.n1 = callnode
                 if e.n2 == callnode: e.n2 = callnode
         self.nodes.add(callnode)
+
+        # We need an edge for each value passed.
         arg_assignments = {}
         for a in func_args:
             e = self.add_arg_pass_edge(callee_line, callnode, func_def, a)
             arg_assignments[a[0].name] = e
-            valnode = self.ExprNode(caller_line, a[1], call_context)
-            callnode.arg_val_map[e.n2] = valnode
+            #valnode = self.ExprNode(caller_line, a[1], call_context)
+            callnode.arg_val_map[e.n2] = (caller_line, a[1])#valnode
         return callnode, arg_assignments
 
 
@@ -542,23 +545,25 @@ class DataFlowGraph(object):
             self.external_deps[var, get_enclosing_scope(ast_node)] = [(line, ast_node)]
 
     def last_transform(self, node):
-        """ Gets the last Node that operated on node, other than a Name or AssName. """
+        """ Gets the last Node that operated on the data in node (i.e. not a straight
+        pass-through) """
         # XXX is this really the right logic?? Do I need the special processing for Keywords
         # or is there a more general rule
         cur, last = node, None
 
         while True:
+            #cprint('cur:'+str(cur), 'green')
+            #if last is not None: cprint('last:'+str(last), 'green')
             inp_edges = self.get_incoming_edges(cur)
             if len(inp_edges) == 0:
                 break
 
             elif isinstance(cur.ast_node, astroid.CallFunc) and isinstance(cur, DataFlowGraph.IntCallFuncNode):
                 # This is an "internal" call.  Need to match up arguments to their value nodes...
-                lastlast = last
-                last = cur
-                #cprint(cur.ast_node.as_string(), 'green')
                 #cprint(cur.arg_val_map, 'green')
-                cur = cur.arg_val_map[lastlast]
+                nextline, nextast = cur.arg_val_map[last]
+                last = cur
+                cur = self.find_value_node(nextline, nextast)
 
             elif isinstance(cur.ast_node, astroid.Keyword):
                 (edge,) = inp_edges
@@ -576,6 +581,24 @@ class DataFlowGraph(object):
                 cur = edge.n1
 
         return cur
+
+    def find_node(self, line, ast_node):
+        nodes = [n for n in self.nodes if n.line == line and n.ast_node == ast_node]
+        assert len(nodes) < 2
+        if len(nodes) == 0:
+            raise ValueError("No such node matching %s, %s" % (str(line), str(ast_node)))
+        return nodes[0]
+
+    def find_value_node(self, line, ast_node):
+        """ Returns the node representing the value from evaluating the given ast.
+        Unlike find_node, this is not necessarily the node itself. For internal function
+        calls, the result here is instead the return from the function. """
+
+        n = self.find_node(line, ast_node)
+        if isinstance(n, DataFlowGraph.IntCallFuncNode):
+            return n.return_value_node
+        else:
+            return n
 
     def get_nodes_from_ast(self, ast_node):
         v = [n for n in self.nodes if n.ast_node == ast_node]
@@ -643,34 +666,52 @@ class DataFlowGraph(object):
 
 
     def subgraph_between(self, start_nodes, end_node):
-        """ Return the nodes and edges reached while traversing the graph from start_nodes
-        (exclusive) to end_node (inclusive) """
-        ret_nodes, ret_edges = set(), set()
+        """
+        Return the nodes and edges reached while traversing the graph from start_nodes
+        (exclusive) to end_node (inclusive).
+
+        The subgraph consists of those nodes that are both "downstream" from the start nodes
+        and "upstream" from the end node. This excludes any "dead ends" from the start nodes.
+        """
+        nodes_fwd, edges_fwd, nodes_back, edges_back = set(), set(), set(), set()
         print "Looking for subgraph_between", start_nodes, end_node
-        ret_nodes.add(end_node)
+        nodes_fwd.add(end_node)
         to_visit = set()
         to_visit.update(start_nodes)
 
-        def sg_between_inner(start_node):
+        def sg_between_fwd(start_node):
             outgoing_edges = self.get_outgoing_edges(start_node)
             #print "sg_between_inner visiting", start_node, start_node.ast_node.as_string()
             if start_node == end_node:
                 return True
             for e in outgoing_edges:
-                ret_edges.add(e)
-                ret_nodes.add(e.n2)
+                edges_fwd.add(e)
+                nodes_fwd.add(e.n2)
                 to_visit.add(e.n2)
             return False
 
 
+        # Forward pass
         found = False
         while len(to_visit) > 0:
             sn = to_visit.pop()
-            found = sg_between_inner(sn) or found
-
+            found = sg_between_fwd(sn) or found
         assert found, "Reached end of graph without seeing end node %s"%str(end_node)
 
-        return ret_nodes, ret_edges
+
+        # backward pass
+        to_visit = {end_node}
+        nodes_back = {end_node}
+        while len(to_visit) > 0:
+            sn = to_visit.pop()
+            incoming_edges = self.get_incoming_edges(sn)
+            for e in incoming_edges:
+                if e.n1 in nodes_fwd:
+                    edges_back.add(e)
+                    nodes_back.add(e.n1)
+                    to_visit.add(e.n1)
+
+        return nodes_fwd.intersection(nodes_back), edges_fwd.intersection(edges_back)
 
 
 
@@ -723,29 +764,37 @@ class DataFlowGraph(object):
         dfd = Digraph()
         done = set()
         n_stmts = max([n.line.stmt_idx for n in self.nodes])+1
+        added_nodes = {}
         for i in range(n_stmts): #
             # Make a subgraph for each statement index
             subgraph = Digraph('cluster_%i'%i)
             subgraph.graph_attr.update(label='stmt %i'% i)
             for n in self.nodes:
                 if n.line.stmt_idx == i:
-                    subgraph.node(str(n), tooltip=str((n.__class__.__name__, n.line,
+                    name = str(n)
+                    while name in added_nodes.values():
+                        name = name+'_'
+                    subgraph.node(name, tooltip=str((n.__class__.__name__, n.line,
                         n.ast_node.as_string(), n.call_context)), color=colors.get(n,'black'))
+                    added_nodes[n] = name
                     done.add(n)
             dfd.subgraph(subgraph)
 
         # Get the nodes that don't have a stmt_idx
         for n in (self.nodes - done):
-            dfd.node(str(n), tooltip=str((n.__class__.__name__, n.line, n.ast_node.as_string())),
+            name = str(n)
+            while name in added_nodes.values():
+                name = name+'_'
+            dfd.node(name, tooltip=str((n.__class__.__name__, n.line, n.ast_node.as_string())),
                     color=colors.get(n, 'black'))
+            added_nodes[n] = name
 
         for e in self.edges:
             assert e.n1 in self.nodes
             assert e.n2 in self.nodes
-            dfd.edge(str(e.n1), str(e.n2), label=e.label)
+            dfd.edge(added_nodes[e.n1], added_nodes[e.n2], label=e.label)
         dfd.graph_attr.update(**kwargs)
         return dfd
-
 
 
 class FunctionNormalizer(astroid.utils.ASTWalker):

@@ -98,6 +98,7 @@ class Optimizer(object):
             for i,arg in enumerate((a_inp, b_inp)):
                 # Ensure that we don't need the intermediate result elsewhere
                 arg_source = dfg.last_transform(arg)
+                print "arg source for ", arg, "is", arg_source
                 if (arg_source in dot_shapes and len(dot_shapes[arg_source]) == 2
                         and not(dfg.has_nonlocal_scope(arg) or dfg.fanout(arg_source) > 1)):
                     if arg_source in done_chains:
@@ -166,8 +167,8 @@ class Optimizer(object):
         def get_dot_shapes(funccall_info):
             #print "In get dot shapes with funccall_info", funccall_info
             need_arg_shapes = []
-            print "got funccall_info"
-            pprint(funccall_info)
+            #print "got funccall_info"
+            #pprint(funccall_info)
             for (ni,f) in funccall_info.iteritems():
                 #print "ni, f, ", ni, f
                 if f == np.dot:
@@ -184,8 +185,8 @@ class Optimizer(object):
         #print "Nodes", dfg.nodes
         func_calls = [NeededInfo(dfg.stmt_sequence, n.line.stmt_idx, n.ast_node.func.as_string(), n)
                 for n in dfg.nodes if isinstance(n, DataFlowGraph.ExtCallNode)]
-        print "func_calls looking for info for "
-        pprint(func_calls)
+        #print "func_calls looking for info for "
+        #pprint(func_calls)
         p = watcher.get_runtime_info(func, func_calls).then(get_dot_shapes).then(optimize_chain_inner).done(None, onError)
 
 
