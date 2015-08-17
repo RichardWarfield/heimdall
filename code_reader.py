@@ -34,8 +34,70 @@ def get_free_vars(stmt):
     used, assigned, maybe_assigned
 
 
+class ASTWalker(object):
+    """a walker visiting a tree in preorder, calling on the handler:
 
-class VariableExtractor(astroid.utils.ASTWalker):
+    * visit_<class name> on entering a node, where class name is the class of
+    the node in lower case
+
+    * leave_<class name> on leaving a node, where class name is the class of
+    the node in lower case
+    """
+
+    def __init__(self, handler):
+        self.handler = handler
+        self._cache = {}
+
+    def walk(self, node, _done=None):
+        """walk on the tree from <node>, getting callbacks from handler"""
+        if _done is None:
+            _done = set()
+        if node in _done:
+            raise AssertionError((id(node), node, node.parent))
+        _done.add(node)
+        skip_children = self.visit(node)
+        if skip_children:
+            print "Going to skip ", skip_children
+
+        for child_node in node.get_children():
+            assert child_node is not node
+            if not skip_children or child_node not in skip_children:
+                self.walk(child_node, _done)
+            else:
+                print "skipping", child_node
+
+        self.leave(node)
+        assert node.parent is not node
+
+    def get_callbacks(self, node):
+        """get callbacks from handler for the visited node"""
+        klass = node.__class__
+        methods = self._cache.get(klass)
+        if methods is None:
+            handler = self.handler
+            kid = klass.__name__.lower()
+            e_method = getattr(handler, 'visit_%s' % kid,
+                               getattr(handler, 'visit_default', None))
+            l_method = getattr(handler, 'leave_%s' % kid,
+                               getattr(handler, 'leave_default', None))
+            self._cache[klass] = (e_method, l_method)
+        else:
+            e_method, l_method = methods
+        return e_method, l_method
+
+    def visit(self, node):
+        """walk on the tree from <node>, getting callbacks from handler"""
+        method = self.get_callbacks(node)[0]
+        if method is not None:
+            return method(node)
+
+    def leave(self, node):
+        """walk on the tree from <node>, getting callbacks from handler"""
+        method = self.get_callbacks(node)[1]
+        if method is not None:
+            return method(node)
+
+class VariableExtractor(ASTWalker):
     """
     Goal is to identify three types of variables: those that are being loaded/read; those
     that are being modified; and those that may or may not be modified.
@@ -78,42 +140,31 @@ class VariableExtractor(astroid.utils.ASTWalker):
         """ lhs marked as assigned """
         for tgt in node.targets:
             self.assigned.add(tgt.as_string())
-        [self.visit(c) for c in node.targets]
-        self.visit(node.value)
 
 
     def visit_augassign(self, node):
         self.assigned.add((node.target.as_string()))
-        self.visit(node.target)
-        self.visit(node.value)
 
     def visit_callfunc(self, node):
         # TODO: what if node.func is not just a name..?
-        for n in node.args:
-            self.visit(n)
-        if node.starargs:
-            self.visit(node.starargs)
-        if node.kwargs:
-            self.visit(node.kwargs)
+        return {node.func}
 
     def leave_callfunc(self, node):
         """ add late so we get the right order of execution"""
         self.function_calls.append(node)
 
-    def visit_getattr(self, node):
+    #def visit_getattr(self, node):
         # any Calls under here?  If so, visit
         #self.varnames.add(node)
         # TODO greater granularity ...
-        self.visit(node.expr)
+        #self.visit(node.expr)
 
-    def visit_subscript(self, node):
+    #def visit_subscript(self, node):
         #self.varnames.add(node)
-        self.visit(node.value)
-        self.visit(node.slice)
+        #pass
 
-    def set_context(self, node, child_node):
-        # ???
-        pass
+# From Astroid
+# TODO  replace this
 
 def is_pure_func(f):
     """

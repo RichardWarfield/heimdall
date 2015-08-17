@@ -10,7 +10,7 @@ def g(n):
     print x.shape
 
 def func2(a, b=1):
-    x = b
+    # x = b ## TODO
     return np.dot(a, b)
 
 

@@ -1,7 +1,6 @@
 
-* Multiple visits to same code line
-* Fix "stranded" nodes in dfg
-* Memory leaks -- IT'S AN ASTROID PROBLEM!
+* Internal call arguments that are not part of the optimizee - let them pass through.
+* Allow additional outgoing edges from nodes_to_replace that are mere aliases of inputs to the optimized graph
 * Finding a place for the preface when some code (which will be removed) comes between needed assigns e.g.
 
     tmp1 = np.dot(j,k)
@@ -18,6 +17,11 @@
 
 
 
+DONE: 
+* Multiple visits to same code line
+* Memory leaks -- (not done, but determined it's an astroid problem)
+* Fix "fanout" for args that pass through an intfunccall (done - no more IntFuncCallNodes)
+* Fix "stranded" nodes in dfg
 
 
 
@@ -27,13 +31,3 @@
 -----------
 
 
-On the multiple visits to a line of code... the obvious way to do this is to coherently assign stmt numbers.
-But there is no way to be one-to-one with lines as executed.  
-Consider call-return.  Execution of the call line is broken into multiple pieces of execution (one break per
-function call).  
-
-Cleanest option would be to assign the same number to every node whose ast_node is part of the same statement. Then
-we would have multiple separated visits to the same stmt_idx. 
-
-This will make it more challenging to match assign-use instances.  I will have to track which assignments are in 
-scope and have been executed.  I'm already doing this to a degree with follow_statements_until_return.

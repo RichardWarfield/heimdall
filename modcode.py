@@ -67,17 +67,6 @@ class IfGuard(object):
 
 
 
-def partition(lst, key_fn):
-    """ Utility function to separate a list into a dictionary of lists, separated by
-    key equivalence groups """
-    res = {}
-    for x in lst:
-        key = key_fn(x)
-        if key in res:
-            res[key].append(x)
-        else:
-            res[key] = [x]
-    return res
 
 
 def make_assign_stmt(varname, expr, block):#, before_stmt):
@@ -382,7 +371,7 @@ def replace_subgraph_and_code(dfg, nodes_to_replace, input_nodes, new_expr, assu
     scope_input_names = {(n,first_scope): source_names[n] for n in input_nodes}
     scope_input_names[(behavior_var, first_scope)] = behavior_var
 
-    # behavior_ids is a mapping from IntCallFuncNodes to ints, which are used to identify which
+    # behavior_ids is a mapping from CallContexts to ints, which are used to identify which
     # behavior should happen in a particular call to a particular function (i.e. what to do at each
     # guard)
     behavior_ids = {None: 1}
@@ -444,17 +433,19 @@ def prepare_statement(dfg, node, input_nodes, out_node, scope_input_names, behav
     stmt = get_statement(node.ast_node)
     stmt_nodes = [n for n in nodes_to_replace if n.line.stmt_idx == node.line.stmt_idx]
 
-    # Is it an IntCallFuncNode?  Follow with the right information.
+    # Are there internal calls on this line? If so we need to pass the right information.
     # Is anything in this statement attached to an out edge?  Otherwise we guard around it
     # (track where each window starts/ends)
     if not any([nd == out_node for nd in stmt_nodes]):
         local_bv = scope_input_names[(behavior_var, stmt.scope())]
 
+        internal_calls = sorted([c for c in dfg.contexts.values() if c.call_line == node.line],
+                key=lambda x: x.line_call_order)
         if isinstance(stmt, astroid.Function):
             # If this is a function definition we don't change it
             pass
-        elif any([isinstance(sn, DataFlowGraph.IntCallFuncNode) for sn in stmt_nodes]):
-            newst = prepare_statement_with_internal_calls(dfg, nodes_to_replace, stmt, stmt_nodes,
+        elif len(internal_calls) > 0:
+            newst = prepare_statement_with_internal_calls(dfg, nodes_to_replace, stmt, internal_calls,
                 input_nodes, behavior_var, behavior_ids, scope_input_names)
             update_guards(guards, stmt, local_bv, behavior_ids[node.call_context], newst, [stmt])
         elif (len(stmt_nodes)==1 and isinstance(stmt_nodes[0], DataFlowGraph.VarAssignNode)):
@@ -497,10 +488,10 @@ def update_guards(guards, stmt, behavior_var, test_val, block_if_equal, block_if
 
 
 
-def prepare_statement_with_internal_calls(dfg, nodes_to_replace, stmt, snodes, inputs, behavior_var,
+def prepare_statement_with_internal_calls(dfg, nodes_to_replace, stmt, internal_calls, inputs, behavior_var,
         behavior_ids, scope_input_names):
     """
-    stmt is a statement with one or more IntCallFuncNodes.
+    stmt is a statement with one or more internal function calls.
     snodes is the list of all nodes relating to this statement.
 
     For each internal function call in the statement:
@@ -516,43 +507,44 @@ def prepare_statement_with_internal_calls(dfg, nodes_to_replace, stmt, snodes, i
     to call these functions in the right order but don't need to worry about the return value.
 
     returns the new statement
-    behavior_ids is a mapping from IntCallFuncNodes to ints, which are used to identify which
+    behavior_ids is a mapping from CallContexts to ints, which are used to identify which
     guards should be respected in the current call to a function.
     """
-    def strip_prep_callfunc(intcall, new_callfunc):
+    def strip_prep_callfunc(call_ctx, new_callfunc):
         """ Set args to none except those carrying the inputs and behavior var """
-        for i,arg in enumerate(intcall.ast_node.args):
+        for i,arg in enumerate(call_ctx.callfunc_ast.args):
             # TODO: make it so I don't actually have to create a node just to check if is
             # is present..
-            exprnode = dfg.ExprNode(intcall.line,
-                arg.value if isinstance(arg, astroid.Keyword) else arg, intcall.call_context)
-            if exprnode in nodes_to_replace:
-                noneconst = make_astroid_node(astroid.Const, value=None)
-                if isinstance(arg, astroid.Keyword):
-                    nonekw = make_astroid_node(astroid.Keyword, arg=arg.arg, value=noneconst,
-                            parent=new_callfunc.args)
-                    noneconst.parent = nonekw
-                    new_callfunc.args[i] = nonekw
-                else:
-                    noneconst.parent=new_callfunc.args
-                    new_callfunc.args[i] = noneconst
+            try:
+                exprnode = dfg.find_node(call_ctx.call_line,
+                        arg.value if isinstance(arg, astroid.Keyword) else arg)
+                if exprnode in nodes_to_replace:
+                    noneconst = make_astroid_node(astroid.Const, value=None)
+                    if isinstance(arg, astroid.Keyword):
+                        nonekw = make_astroid_node(astroid.Keyword, arg=arg.arg, value=noneconst,
+                                parent=new_callfunc.args)
+                        noneconst.parent = nonekw
+                        new_callfunc.args[i] = nonekw
+                    else:
+                        noneconst.parent=new_callfunc.args
+                        new_callfunc.args[i] = noneconst
+            except ValueError:
+                pass
 
-        newscope = intcall.func_def
-        behavior_ids[intcall] = ensure_inputs_available(new_callfunc, intcall.func_def, inputs, behavior_var,
-                scope_input_names)
+        newscope = call_ctx.func_def
+        behavior_ids[call_ctx] = ensure_inputs_available(new_callfunc, call_ctx.func_def,
+                inputs, behavior_var, scope_input_names)
 
 
     stmt_copy = copy_astroid_node(stmt)
-    ordered_calls = sorted([sn for sn in snodes if isinstance(sn, DataFlowGraph.IntCallFuncNode)],
-            key=lambda x: x.line_call_order)
     res = []
     # Call the internal call funcs in order.  Return if necessary.  Ignore everything else.
     # I think this logic is ok...
-    for sn in ordered_calls:
-        path = ast_path_to_descendent(stmt, sn.ast_node)
+    for ctx in internal_calls:
+        path = ast_path_to_descendent(stmt, ctx.callfunc_ast)
         new_callfunc = ast_follow_path(stmt_copy, path)
-        strip_prep_callfunc(sn, new_callfunc)
-        if isinstance(sn.ast_node.parent, astroid.Return):
+        strip_prep_callfunc(ctx, new_callfunc)
+        if isinstance(ctx.callfunc_ast.parent, astroid.Return):
             res.append(make_astroid_node(astroid.Return, value=new_callfunc, parent=stmt.parent))
         else:
             res.append(make_astroid_node(astroid.Discard, value=new_callfunc, parent=stmt.parent))
@@ -567,7 +559,7 @@ behavior_ctr = 1
 
 def ensure_inputs_available(callfunc, func_def, inputs, behavior_var, scope_input_names):
     """
-    Given an IntCallFuncNode:
+    Given a function call (CallFunc ast):
     1. Add parameters to the function definition that represent the inputs + behavior var.
     2. Add corresponding arguments to the function call.
     (if necessary)
