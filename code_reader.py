@@ -9,6 +9,26 @@ import astroid, astroid.utils
 #IMMEDIATE_IS_NARGS = {BUILD_TUPLE}
 
 
+def label_linenos(node, work={}):
+    lineno = node.lineno
+    #if node.fromlineno == node.tolineno:
+    if lineno in work:
+        work[lineno].add(node)
+    else:
+        work[lineno] = {node}
+    for child in node.get_children():
+        if child.lineno != lineno:
+            label_linenos(child, work)
+    return work
+
+
+def make_line_to_asts(filename):
+    # Parse the relevant files into AST.  A dict comprehension!!
+    file_asts = astroid.MANAGER.ast_from_file(filename)
+
+    # I need a mapping from lines to AST elements.  TODO this is probably too slow..
+    return label_linenos(file_asts)
+
 def to_ast(func, line=None):
     lines = inspect.getsourcelines(func)[0]
     if line:
@@ -26,13 +46,6 @@ def ast_var_deps(tree):
         free_vars = get_free_vars(stmt)
 
 BINARY_OPS = {ast.Add, ast.And, ast.BitAnd, ast.BitOr, ast.BitXor, ast.Gt, ast.GtE, ast.Eq, ast.Is, ast.IsNot, ast.Lt, ast.LtE, ast.Mod, ast.Mult, ast.NotEq, ast.In, ast.NotIn, ast.Or, ast.Sub}
-def get_free_vars(stmt):
-    ve = VariableExtractor()
-    ve.visit(stmt)
-    return ve.varnames
-
-    used, assigned, maybe_assigned
-
 
 class ASTWalker(object):
     """a walker visiting a tree in preorder, calling on the handler:
@@ -56,15 +69,13 @@ class ASTWalker(object):
             raise AssertionError((id(node), node, node.parent))
         _done.add(node)
         skip_children = self.visit(node)
-        if skip_children:
-            print "Going to skip ", skip_children
 
         for child_node in node.get_children():
             assert child_node is not node
             if not skip_children or child_node not in skip_children:
                 self.walk(child_node, _done)
-            else:
-                print "skipping", child_node
+            #else:
+                #print "skipping", child_node
 
         self.leave(node)
         assert node.parent is not node

@@ -5,9 +5,12 @@ import cpu_tools
 import pdb
 import os.path
 import copy
+import astroid
 from termcolor import cprint
 from pprint import pprint
 from aplus import Promise
+
+import code_reader
 
 import logging
 logger = logging.getLogger(__name__)
@@ -21,6 +24,8 @@ class FunctionWatcher(object):
         self.tracing = False
         self.tracer_hash = 0
         self.start_trace_frame = None
+        self.line_to_asts = {}
+        self.loop_limit = 1
 
     def watch_next_invocation(self, func, callback, needed=None):
         """
@@ -29,6 +34,8 @@ class FunctionWatcher(object):
         """
         self.profile = []
         self.stack = []
+        self.loopstack = []
+        self.loopstats = {} # Map from stmt_idx to LoopStats
         if isinstance(needed, NeededInfo):
             needed = (needed,)
 
@@ -57,6 +64,16 @@ class FunctionWatcher(object):
         sys.setprofile(self.profile_cb)
         self.finished_callback = callback
 
+    def loop_at(self, filename, lineno):
+
+        # Parse the relevant files into AST.  A dict comprehension!!
+        if filename not in self.line_to_asts:
+            self.line_to_asts[filename] = code_reader.make_line_to_asts(filename)
+        for st in self.line_to_asts[filename][lineno]:
+            if type(st) in (astroid.For, astroid.While):
+                return st
+        return None
+
 
     def trace_cb(self, frame, event, arg):
 
@@ -75,24 +92,71 @@ class FunctionWatcher(object):
         func_name = co.co_name
         filename, lineno = os.path.abspath(frame.f_code.co_filename), frame.f_lineno
 
-        self.tracer_hash += hash((filename, lineno, event))
+        skip_trace = self.update_looping_status(frame, filename, lineno)
+
         #cprint ("adding to tracer_hash %s: %i"%(str((filename, lineno, event)), self.tracer_hash), 'green')
 
-        if self.tracer_hash in self.needed_info:
-            ni = self.needed_info[self.tracer_hash]
-            #print "in trace line, getting info"
-            #print "trace_line evaluating the following expression: ", expr
-            #print "trace_line getting needed_info for hash %i at (%s, %i):"%(self.tracer_hash, filename, lineno), ni
-            try:
-                res = eval(ni.expr, frame.f_globals, frame.f_locals)
-            except Exception as detail:
-                print detail
-                raise
-            self.saved_info[ni] = res
-        #else:
-            #cprint ("Hash miss: %i" % self.tracer_hash, "red")
+        if not skip_trace:
+            self.tracer_hash += hash((filename, lineno, event))
+            if self.tracer_hash in self.needed_info:
+                ni = self.needed_info[self.tracer_hash]
+                #print "in trace line, getting info"
+                #print "trace_line evaluating the following expression: ", expr
+                #print "trace_line getting needed_info for hash %i at (%s, %i):"%(self.tracer_hash, filename, lineno), ni
+                try:
+                    res = eval(ni.expr, frame.f_globals, frame.f_locals)
+                except Exception as detail:
+                    print detail
+                    raise
+                self.saved_info[ni] = res
 
-        self.tracer.append((filename, lineno, event))
+            #print "Tracer adding ", (filename, lineno, event)
+            self.tracer.append((filename, lineno, event))
+
+    def update_looping_status(self, frame, filename, lineno):
+        # First check whether we've left one or more loops... we can leave a loop by:
+        # 1) reach end of loop, 2) break, 3) return, 4) exception
+        # The rule we will use is that we are in a loop if we are
+        # A) In the same frame as the loop, and lexically inside the loop
+        # B) In a frame called from the lexical inside of the loop
+        skip_trace = False
+        frameh = hash(frame)
+        # TODO This is really inefficient... don't loop on every line...
+        for i in range(len(self.loopstack)):
+            loopstat = self.loopstack[i]
+            # Check if this is the same frame, and we're lexically outside the loop
+            # If so we are outside all lower loops too.
+            if (loopstat.frameh == frameh and
+                    (lineno < loopstat.loop_ast.fromlineno or lineno > loopstat.loop_ast.tolineno)):
+                #print "Exiting loops:", self.loopstack[i:]
+                del self.loopstack[i:]
+                break
+            else:
+                if loopstat.trace_counter >= self.loop_limit:
+                    skip_trace = True
+                    if loopstat.frameh == frameh and loopstat.loop_ast.lineno == lineno:
+                        self.loopstack[i].skip_counter += 1
+
+        # Check if we're going into a loop
+        if not skip_trace:
+            loop = self.loop_at(filename, lineno)
+            if loop is not None:
+                #print "Found loop at ", (filename, lineno), 'loopstack is ', self.loopstack
+                if len(self.loopstack) > 0 and (self.loopstack[-1].loop_ast, self.loopstack[-1].frameh) == (loop, hash(frame)):
+                    # Increment loop counter
+                    self.loopstack[-1].trace_counter += 1
+                    skip_trace = self.loopstack[-1].trace_counter >= self.loop_limit
+                    #if self.loopstack[-1][2] >= self.loop_limit:
+                        #print "Reached limit for loop:", filename, lineno, loop
+                else:
+                    # Entering a new loop
+                    # (loop ast, frame hash, number of iterations)
+                    #print "Recoding entering of loop:", filename, lineno, loop
+                    newloop = LoopStats(loop, frame)
+                    self.loopstats[len(self.tracer)] = newloop
+                    self.loopstack.append(newloop)
+
+        return skip_trace
 
 
     def profile_cb(self, frame, event, arg):
@@ -156,6 +220,15 @@ class FunctionWatcher(object):
         sys.setprofile(None)#self.old_profile)
         sys.settrace(None)#self.old_trace)
 
+class LoopStats(object):
+    def __init__(self, loop_ast, frame):
+        self.loop_ast, self.frameh = loop_ast, hash(frame)
+        self.trace_counter = 0
+        self.skip_counter = 0
+
+    def __repr__(self):
+        return "<LoopStats for %s (frame %x): %d traced, %d skipped>"%(self.loop_ast, self.frameh,
+                self.trace_counter, self.skip_counter)
 
 class NeededInfo(object):
     """

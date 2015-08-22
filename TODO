@@ -1,4 +1,7 @@
 
+* Assignments to "complex" l-values -- subscript, getitem, and maybe function calls
+* Loops: For, While
+* Returning from within a loop
 * Internal call arguments that are not part of the optimizee - let them pass through.
 * Allow additional outgoing edges from nodes_to_replace that are mere aliases of inputs to the optimized graph
 * Finding a place for the preface when some code (which will be removed) comes between needed assigns e.g.
@@ -9,7 +12,6 @@
 
 * Get rid of redundant arguments created by prepare_statement_with_internal_calls
 * Branching: If, Try/Except
-* Loops: For, While
 * multiple assign
 * multiple statements on a line
 * Comprehensions
@@ -31,3 +33,7 @@ DONE:
 -----------
 
 
+* Assignments to "complex" l-values -- subscript, getitem, and maybe function calls
+
+Probably I will only deal with l-values that are "atomic" - i.e. no function calls or custom __getitem__/__getattr__
+To be careful, I should check that the "thing" I am changing is what I think it is
