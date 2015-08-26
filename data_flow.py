@@ -82,6 +82,9 @@ def analyze_flow(stmt_sequence, loop_stats):
 
 
 def follow_statements_until_return(dfg, start_idx, call_context, arg_assignments):
+    """
+    Returns (return ast, idx of next statement)
+    """
     local_assignments = arg_assignments
     # Get variable dependencies
     stmt_idx = start_idx
@@ -89,8 +92,9 @@ def follow_statements_until_return(dfg, start_idx, call_context, arg_assignments
         filename, lineno, event = dfg.stmt_sequence[stmt_idx]
         line = LineExec(stmt_idx, filename, lineno)
 
+        stmt_idx = process_one_statement(dfg, line, local_assignments, call_context)
         if event in ('line', 'call'):
-            stmt_idx = process_one_statement(dfg, line, local_assignments, call_context)
+            print "Processing ", line
 
         elif event == 'return':
             st = list(dfg.line_to_asts[filename][lineno])[0]
@@ -103,44 +107,84 @@ def follow_statements_until_return(dfg, start_idx, call_context, arg_assignments
             assert False, "Don't know what to do with event %s" % event
 
         stmt_idx += 1
+        print "Next idx:", stmt_idx
 
     return None, stmt_idx-start_idx+1
 
 def process_one_statement(dfg, line, local_assignments, call_context, include_body=True):
+    """
+    Returns index of the next statement
+    """
     stmt_idx = line.stmt_idx
     filename, lineno, event = dfg.stmt_sequence[stmt_idx]
     asts = dfg.line_to_asts[filename][lineno]
     for st in asts:
 
-        vardeps, fncalls = get_dependencies_ex_body(st)
-
-        # Process internal function calls first so we have the return nodes available
-        # fncalls should be in precisely the order that we will call from here.
-        stmt_idx = follow_function_calls(dfg, fncalls, line, stmt_idx+1,
-                local_assignments, call_context)
-
-        for var in vardeps:
-            process_variable_dependency(dfg, st, var, line, local_assignments, call_context)
 
         if isinstance(st, astroid.Assign):
-            # Make a node for each variable we assign
-            for target in st.targets:
-                # If it's a simple name assignment...
-                if isinstance(target, astroid.AssName):
-                    if not (type(st.value) is astroid.CallFunc
-                            and get_func_def(st.value, dfg.filenames, st) is not None):
-                        e = dfg.add_assign_edge(line, call_context, target, st.value)
-                        local_assignments[e.label] = e
-                elif isinstance(target, astroid.AssAttr):
-                    pass
-                elif isinstance(target, astroid.Subscript):
-                    e = dfg.add_setitem(line, call_context, target, st.value)
 
-        elif include_body and type(st) in (astroid.For, astroid.While):
+            stmt_idx += process_assign(dfg, st, line, local_assignments, call_context)
 
-            analyze_loop(dfg, stmt_idx, st, local_assignments, call_context)
+        elif isinstance(st, astroid.For):
+            if include_body:
+                stmt_idx, loop_deps = analyze_loop(dfg, line, st, local_assignments, call_context)
 
+
+        elif type(st) in (astroid.Discard, astroid.Function, astroid.Return):
+            # Just include everything
+            stmt_idx += process_variables_and_follow_functions(dfg, st, line, local_assignments,
+                    call_context)
+
+        else:
+            raise NotImplementedError("Don't know how to processs statement of type %s"
+                    % type(st))
+
+    cprint("New stmt_idx: %d"% stmt_idx, 'green')
     return stmt_idx
+
+def process_assign(dfg, st, line, local_assignments, call_context):
+    """
+    Returns the number of statements advanced in processing the assign (i.e. from
+    internal function calls -- returns zero if no internal function calls)
+    """
+
+    start_idx = line.stmt_idx
+    stmt_idx = process_variables_and_follow_functions(dfg, st.value, line, local_assignments,
+            call_context)
+
+    # Make a node for each variable we assign
+    for target in st.targets:
+        # If it's a simple name assignment...
+        if isinstance(target, astroid.AssName):
+            if not (type(st.value) is astroid.CallFunc
+                    and get_func_def(st.value, dfg.filenames, st) is not None):
+                e = dfg.add_assign_edge(line, call_context, target, st.value)
+                local_assignments[e.label] = e
+        elif isinstance(target, astroid.AssAttr):
+            raise NotImplementedError() # TODO
+        elif isinstance(target, astroid.Subscript):
+            e = dfg.add_setitem(line, call_context, target, st.value)
+
+    return stmt_idx - start_idx
+
+def process_variables_and_follow_functions(dfg, ast, line, local_assignments, call_context):
+    """
+    Returns the number of statements advanced in processing (i.e. from
+    internal function calls -- returns zero if no internal function calls)
+    """
+
+    vardeps, fncalls = get_dependencies_ex_body(ast)
+    stmt_idx = line.stmt_idx
+
+    # Process internal function calls first so we have the return nodes available
+    # fncalls should be in precisely the order that we will call from here.
+    stmt_incr = follow_function_calls(dfg, fncalls, line, stmt_idx, local_assignments,
+            call_context)
+
+    for var in vardeps:
+        process_variable_dependency(dfg, ast, var, line, local_assignments, call_context)
+
+    return stmt_incr
 
 
 def process_variable_dependency(dfg, st, var, line, local_assignments, call_context):
@@ -170,7 +214,7 @@ def process_variable_dependency(dfg, st, var, line, local_assignments, call_cont
                 while not pst.parent.is_statement:
                     func_call_parent = get_func_for_arg(pst)
                     if (func_call_parent is not None
-                            and get_func_def(func_call_parent, dfg.filenames,st) is None):
+                            and get_func_def(func_call_parent, dfg.filenames, st) is None):
                         dfg.add_external_call(line, call_context, func_call_parent)
                     elif (isinstance(pst.parent, astroid.CallFunc)
                             and get_func_def(pst.parent, dfg.filenames, st) is not None):
@@ -189,6 +233,10 @@ def process_variable_dependency(dfg, st, var, line, local_assignments, call_cont
         dfg.add_external_dep(var.name, line, var)
 
 def follow_function_calls(dfg, fncalls, line, stmt_idx, local_assignments, call_context):
+    """
+    Returns the number of statements advanced
+    """
+    start_idx = stmt_idx
     for (line_call_order, fcall) in enumerate(fncalls):
         func_def = get_func_def(fcall, dfg.filenames, fcall)
         if func_def is not None:
@@ -196,7 +244,7 @@ def follow_function_calls(dfg, fncalls, line, stmt_idx, local_assignments, call_
             stmt_idx,_ = follow_function_call(dfg, fcall, func_def, line, stmt_idx+1,
                     local_assignments, line_call_order, call_context)
 
-    return stmt_idx
+    return stmt_idx - start_idx
 
 def follow_function_call(dfg, fcall, func_def, line, next_stmt_idx,
         local_assignments, line_call_order, call_context):
@@ -210,6 +258,8 @@ def follow_function_call(dfg, fcall, func_def, line, next_stmt_idx,
 
     The function call node we create is an instance of IntCallFuncNode which has
     one in edge and one out edge for each argument.
+
+    Returns (next stmt, callee context)
     """
 
     callee_line = LineExec(next_stmt_idx, os.path.abspath(func_def.root().file), func_def.lineno)
@@ -247,27 +297,34 @@ def follow_function_call(dfg, fcall, func_def, line, next_stmt_idx,
     return stmt_idx, callee_ctx
 
 
-def analyze_loop(dfg, start_idx, loop_ast, local_assignments, call_context):
+def analyze_loop(dfg, start_line, loop_ast, local_assignments, call_context):
     """
     - create a new child dfg to represent the loop
     - Process statements till we exit the loop
+
+    Returns (next statement idx, variable dependencies in loop)
     """
     child_dfg = DataFlowGraph(dfg.stmt_sequence, dfg.line_to_asts, dfg.filenames, dfg.loop_stats)
-    loop_line = LineExec(start_idx, os.path.abspath(loop_ast.root().file), loop_ast.lineno)
 
-    stmt_idx = start_idx
+    if isinstance(loop_ast, astroid.For):
+        stmt_idx = process_variables_and_follow_functions(child_dfg, loop_ast.iter, start_line,
+                local_assignments, call_context)
+
+        e = child_dfg.add_assign_edge(start_line, call_context, loop_ast.target, loop_ast.iter)
+        local_assignments[e.label] = e
+    else:
+        raise NotImplementedError()
+
     while stmt_idx < len(dfg.stmt_sequence):
         filename, lineno, event = dfg.stmt_sequence[stmt_idx]
-        if (os.path.abspath(loop_ast.root().file) != filename
-                or lineno < loop_ast.fromlineno
-                or lineno > loop_ast.tolineno):
+        if not lexically_inside(filename, lineno, loop_ast):
             break
 
         line = LineExec(stmt_idx, filename, lineno)
 
         if event in ('line', 'call'):
             stmt_idx = process_one_statement(child_dfg, line, local_assignments, call_context,
-                    include_body=(line != loop_line) )
+                    include_body=(line != start_line) )
 
         elif event == 'return':
             # TODO XXX
@@ -282,7 +339,21 @@ def analyze_loop(dfg, start_idx, loop_ast, local_assignments, call_context):
 
         stmt_idx += 1
 
-    return dfg.add_loop(loop_line, loop_ast, child_dfg, call_context)
+    loop_node = dfg.add_loop(start_line, loop_ast, child_dfg, call_context)
+
+    # Get the dependencies from outside the loop
+    outside_deps = [e for e in child_dfg.edges
+        if not lexically_inside(e.n1.line.filename, e.n1.line.lineno, loop_ast)]
+    for od in outside_deps:
+        dfg.add_loop_dependency(od, loop_node, call_context)
+
+
+    return stmt_idx, outside_deps
+
+def lexically_inside(filename, lineno, ast):
+    return (os.path.abspath(ast.root().file) == filename
+                and lineno >= ast.fromlineno and lineno <= ast.tolineno)
+
 
 def have_visited(fileline, stmt_sequence):
     for x in stmt_sequence:
@@ -505,6 +576,12 @@ class DataFlowGraph(object):
         self.edges.add(e)
         return e
 
+    def add_loop_dependency(self, assign_use_edge, loop, call_context):
+        e = self.AssignUseEdge(assign_use_edge.n1, loop, assign_use_edge.label)
+        self.nodes.add(assign_use_edge.n1)
+        self.edges.add(e)
+
+
     def add_composition_edge(self, line, call_context, used_node, using_node):
 
         n1 = self.find_or_create_value_node(line, used_node, call_context)
@@ -617,6 +694,7 @@ class DataFlowGraph(object):
         n = self.LoopNode(line, loop_ast, call_context)
         n.dfg = child_dfg
         self.nodes.add(n)
+        return n
 
 
     def last_transform(self, node):
@@ -671,9 +749,16 @@ class DataFlowGraph(object):
         calls, the result here is instead the return from the function. """
 
         if (ast_node, line.stmt_idx) in self.contexts:
+            assert self.contexts[ast_node, line.stmt_idx].return_value_node is not None
             return self.contexts[ast_node, line.stmt_idx].return_value_node
         else:
             return self.find_node(line, ast_node)
+
+    def find_node_by_string(self, s):
+        for n in self.nodes:
+            if s in str(n):
+                return n
+
 
     def find_or_create_value_node(self, line, ast_node, call_context):
         try:

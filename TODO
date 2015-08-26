@@ -1,5 +1,6 @@
 
 * Assignments to "complex" l-values -- subscript, getitem, and maybe function calls
+    * Including how to deal with dependencies on (parts of) compound objects
 * Loops: For, While
 * Returning from within a loop
 * Internal call arguments that are not part of the optimizee - let them pass through.

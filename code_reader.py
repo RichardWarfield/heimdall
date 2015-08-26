@@ -12,10 +12,11 @@ import astroid, astroid.utils
 def label_linenos(node, work={}):
     lineno = node.lineno
     #if node.fromlineno == node.tolineno:
-    if lineno in work:
-        work[lineno].add(node)
-    else:
-        work[lineno] = {node}
+    if node.is_statement:
+        if lineno in work:
+            work[lineno].add(node)
+        else:
+            work[lineno] = {node}
     for child in node.get_children():
         if child.lineno != lineno:
             label_linenos(child, work)
