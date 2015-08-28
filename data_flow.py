@@ -1,4 +1,3 @@
-
 import ast
 #import networkx as nx
 from graphviz import Digraph
@@ -25,6 +24,11 @@ THINGS I NEED TO THINK MORE CAREFULLY ABOUT:
 
 # Identifies a specific execution of a specific line
 LineExec = collections.namedtuple('LineExec', ('stmt_idx', 'filename', 'lineno'))
+
+# Information about a local assignment: the edge representing the assignment, and the
+# DFG of the block (loop) where the assignment took place
+LocalAssignment = collections.namedtuple('LocalAssignment', ('ass_edge', 'dfg'))
+
 
 
 def analyze_flow(stmt_sequence, loop_stats):
@@ -85,7 +89,7 @@ def follow_statements_until_return(dfg, start_idx, call_context, arg_assignments
     """
     Returns (return ast, idx of next statement)
     """
-    local_assignments = arg_assignments
+    local_assignments = {k: LocalAssignment(v, dfg) for (k,v) in arg_assignments.iteritems()}
     # Get variable dependencies
     stmt_idx = start_idx
     while stmt_idx < len(dfg.stmt_sequence):
@@ -165,7 +169,7 @@ def process_assign(dfg, st, line, local_assignments, call_context):
             if not (type(st.value) is astroid.CallFunc
                     and get_func_def(st.value, dfg.filenames, st) is not None):
                 e = dfg.add_assign_edge(line, call_context, target, st.value)
-                local_assignments[e.label] = e
+                local_assignments[e.label] = LocalAssignment(e, dfg)
         elif isinstance(target, astroid.AssAttr):
             raise NotImplementedError() # TODO
         elif isinstance(target, astroid.Subscript):
@@ -202,8 +206,18 @@ def process_variable_dependency(dfg, st, var, line, local_assignments, call_cont
     """
 
     if var.name in local_assignments:
-        ass_edge = local_assignments[var.name]
-        dfg.add_assign_use_edge(ass_edge.n2.line, line, call_context, ass_edge.n2.ast_node, var)
+        ass_edge = local_assignments[var.name].ass_edge
+        if local_assignments[var.name].dfg == dfg:
+            # Same block
+            dfg.add_assign_use_edge(ass_edge.n2.line, line, call_context, ass_edge.n2.ast_node, var)
+        else:
+            try:
+                block = dfg.find_block_containing(local_assignments[var.name].dfg)
+                dfg.add_assign_use_edge(block.line, line, call_context, block.ast_node, var)
+            except ValueError:
+                # If not contained in any block here then it was assigned in a higher block
+                dfg.add_assign_use_edge(ass_edge.n2.line, line, call_context, ass_edge.n2.ast_node, var)
+
     resolved_internally = False
     asmts = get_enclosing_scope(st).lookup(var.name)[1]
     for asmt in asmts:
@@ -319,7 +333,7 @@ def analyze_loop(dfg, start_line, loop_ast, local_assignments, call_context):
                 local_assignments, call_context)
 
         e = child_dfg.add_assign_edge(start_line, call_context, loop_ast.target, loop_ast.iter)
-        local_assignments[e.label] = e
+        local_assignments[e.label] = LocalAssignment(e, dfg)
     else:
         raise NotImplementedError()
 
@@ -348,6 +362,7 @@ def analyze_loop(dfg, start_line, loop_ast, local_assignments, call_context):
 
 
     loop_node = dfg.add_loop(start_line, loop_ast, child_dfg, call_context)
+    child_dfg.node_in_parent = loop_node
 
     # Get the dependencies from outside the loop
     outside_deps = [e for e in child_dfg.edges
@@ -542,7 +557,7 @@ class DataFlowGraph(object):
         def __str__(self):
             return str((self.func_def, self.call_line, self.callfunc_ast.as_string()))
 
-    def __init__(self, stmt_sequence, line_to_asts, filenames, loop_stats):
+    def __init__(self, stmt_sequence, line_to_asts, filenames, loop_stats, node_in_parent=None):
         self.edges = set()
         self.nodes = set()
         self.external_deps = {}
@@ -550,6 +565,7 @@ class DataFlowGraph(object):
         self.contexts = {}
         self.stmt_sequence, self.line_to_asts = stmt_sequence, line_to_asts
         self.filenames, self.loop_stats = filenames, loop_stats
+        self.node_in_parent = node_in_parent
 
     def add_assign_edge(self, line, call_context, assname_node, val_node):
         # First node the the expression we are assigning to the variable
@@ -579,7 +595,7 @@ class DataFlowGraph(object):
         self.edges.add(e3)
 
     def add_assign_use_edge(self, asmt_line, use_line, call_context, asmt_node, use_node):
-        n1 = self.VarAssignNode(asmt_line, asmt_node, call_context)
+        n1 = self.get_node_for_ast(asmt_node) or self.VarAssignNode(asmt_line, asmt_node, call_context)
         n2 = self.find_or_create_value_node(use_line, use_node, call_context)
         self.nodes.add(n1)
         self.nodes.add(n2)
@@ -704,6 +720,7 @@ class DataFlowGraph(object):
     def add_loop(self, line, loop_ast, child_dfg, call_context):
         n = self.LoopNode(line, loop_ast, call_context)
         n.dfg = child_dfg
+        n.this_dfg = self
         self.nodes.add(n)
         return n
 
@@ -778,10 +795,24 @@ class DataFlowGraph(object):
             return self.ExprNode(line, ast_node, call_context)
 
 
-    def get_nodes_from_ast(self, ast_node):
+    def get_node_for_ast(self, ast_node):
         v = [n for n in self.nodes if n.ast_node == ast_node]
-        assert len(v) == 1
-        return v[0]
+        assert len(v) <= 1
+        if len(v) == 1:
+            return v[0]
+        else:  # len(v) == 0
+            return None
+
+    def find_block_containing(self, child_dfg):
+        assert self != child_dfg
+
+        next = child_dfg.node_in_parent
+        while next != None:
+            if next in self.nodes:
+                return next
+            next = next.this_dfg.node_in_parent
+        raise ValueError("Block not found")
+
 
     def get_inputs(self, node):
         """ Returns the nodes that have edges to this node """
