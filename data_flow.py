@@ -93,45 +93,47 @@ def follow_statements_until_return(dfg, start_idx, call_context, arg_assignments
         line = LineExec(stmt_idx, filename, lineno)
 
         if event in ('line', 'call'):
-            stmt_idx = process_one_statement(dfg, line, local_assignments, call_context)
+            stmt_idx += process_one_statement(dfg, line, local_assignments, call_context)
 
         elif event == 'return':
             st = list(dfg.line_to_asts[filename][lineno])[0]
             assert isinstance(st, astroid.Return)
             #print "*** Returning from ", st.as_string()
+            print "Finished follow_statements_until_return, final assignments are:"
+            pprint(local_assignments)
             return (st, stmt_idx-start_idx+1)
             #return_from = (filename,lineno,st)
 
         else:
             assert False, "Don't know what to do with event %s" % event
 
+        stmt_idx += 1
         print "Next idx:", stmt_idx
 
     return None, stmt_idx-start_idx+1
 
 def process_one_statement(dfg, line, local_assignments, call_context, include_body=True):
     """
-    Returns index of the next statement
+    Returns number of statements advancned
     """
     print "Processing ", line, "for DFG", hash(dfg)
     stmt_idx = line.stmt_idx
     filename, lineno, event = dfg.stmt_sequence[stmt_idx]
     asts = dfg.line_to_asts[filename][lineno]
+    assert len(asts) == 1, "Multi-statement lines not implemented yet"
     for st in asts:
 
         if isinstance(st, astroid.Assign):
 
             stmt_idx += process_assign(dfg, st, line, local_assignments, call_context)
-            print "Post-Assign-advance stmt idx is ", stmt_idx
+            #print "Post-Assign-advance stmt idx is ", stmt_idx
 
         elif isinstance(st, astroid.For):
 
             if include_body:
-                print "Pre-loop-advance stmt idx is ", stmt_idx
                 stmt_adv, loop_deps = analyze_loop(dfg, line, st, local_assignments, call_context)
                 stmt_idx += stmt_adv
-                print "Advance amount is ", stmt_adv
-                print "Post-loop-advance stmt idx is ", stmt_idx
+                #print "Post-loop-advance stmt idx is ", stmt_idx
 
         elif type(st) in (astroid.Discard, astroid.Function, astroid.Return):
             # Just include everything
@@ -142,9 +144,9 @@ def process_one_statement(dfg, line, local_assignments, call_context, include_bo
             raise NotImplementedError("Don't know how to processs statement of type %s"
                     % type(st))
 
-    stmt_idx += 1
-    cprint("New stmt_idx: %d"% stmt_idx, 'green')
-    return stmt_idx
+    cprint("Processing '%s...' consumed %d statements"% (st.as_string()[:10],
+        stmt_idx-line.stmt_idx), 'green')
+    return stmt_idx - line.stmt_idx
 
 def process_assign(dfg, st, line, local_assignments, call_context):
     """
@@ -321,17 +323,16 @@ def analyze_loop(dfg, start_line, loop_ast, local_assignments, call_context):
     else:
         raise NotImplementedError()
 
-    stmt_idx += 1 # Move on to the body
-
-    while stmt_idx < len(dfg.stmt_sequence):
-        filename, lineno, event = dfg.stmt_sequence[stmt_idx]
+    while stmt_idx+1 < len(dfg.stmt_sequence):
+        filename, lineno, event = dfg.stmt_sequence[stmt_idx+1]
         if not lexically_inside(filename, lineno, loop_ast):
             break
+        stmt_idx += 1
 
         line = LineExec(stmt_idx, filename, lineno)
 
         if event in ('line', 'call'):
-            stmt_idx = process_one_statement(child_dfg, line, local_assignments, call_context,
+            stmt_idx += process_one_statement(child_dfg, line, local_assignments, call_context,
                     include_body=(line != start_line) )
 
         elif event == 'return':
@@ -345,7 +346,6 @@ def analyze_loop(dfg, start_line, loop_ast, local_assignments, call_context):
         else:
             assert False, "Don't know what to do with event %s" % event
 
-        stmt_idx += 1
 
     loop_node = dfg.add_loop(start_line, loop_ast, child_dfg, call_context)
 
@@ -355,7 +355,7 @@ def analyze_loop(dfg, start_line, loop_ast, local_assignments, call_context):
     for od in outside_deps:
         dfg.add_loop_dependency(od, loop_node, call_context)
 
-    print "Analyze loop advances", stmt_idx-start_line.stmt_idx
+    print "Analyze loop for", hash(child_dfg), " advances", stmt_idx-start_line.stmt_idx
 
     return stmt_idx-start_line.stmt_idx, outside_deps
 
@@ -517,6 +517,8 @@ class DataFlowGraph(object):
             return hash((self.n1, self.n2, self.label))
         def __eq__(self, other):
             return (self.n1, self.n2, self.label) == (other.n1, other.n2, other.label)
+        def __repr__(self):
+            return '<'+type(self).__name__+": "+str(self.n1)+'->'+str(self.n2)+'>'
     class AssignEdge(Edge):
         pass
     class AssignUseEdge(Edge):
