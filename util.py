@@ -20,3 +20,8 @@ def partition(lst, key_fn):
             res[key] = [x]
     return res
 
+_counter = 0
+def unique_var(s):
+    global _counter
+    _counter += 1
+    return s+str(_counter)

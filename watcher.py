@@ -129,6 +129,8 @@ class FunctionWatcher(object):
             if (loopstat.frameh == frameh and
                     (lineno < loopstat.loop_ast.fromlineno or lineno > loopstat.loop_ast.tolineno)):
                 #print "Exiting loops:", self.loopstack[i:]
+                for l in self.loopstack:
+                    l.finish()
                 del self.loopstack[i:]
                 break
             else:
@@ -225,6 +227,11 @@ class LoopStats(object):
         self.loop_ast, self.frameh = loop_ast, hash(frame)
         self.trace_counter = 0
         self.skip_counter = 0
+        self.start_t = time.time()
+
+    def finish(self):
+        self.end_t = time.time()
+        self.runtime = self.end_t - self.start_t
 
     def __repr__(self):
         return "<LoopStats for %s (frame %x): %d traced, %d skipped>"%(self.loop_ast, self.frameh,

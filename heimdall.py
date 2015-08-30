@@ -51,7 +51,8 @@ class Heimdall(object):
         #print "Line history:", line_history
         self.dfg = data_flow.analyze_flow(self.watcher.tracer, self.watcher.loopstats)
         #print "Going to start optimizer test now"
-        self.optimizer.optimize_matrix_chain(self.watcher.target_func, self.dfg)
+        #self.optimizer.optimize_matrix_chain(self.watcher.target_func, self.dfg)
+        #self.optimizer.optimize_loops(self.watcher.target_func, self.dfg)
 
 
 

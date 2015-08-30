@@ -97,6 +97,12 @@ def make_astroid_node(cls, **kwargs):
         setattr(o, k, v)
     return o
 
+def make_astroid_function(name, doc, **kwargs):
+    o = astroid.Function(name, doc)
+    for (k,v) in kwargs.iteritems():
+        setattr(o, k, v)
+    return o
+
 def copy_astroid_node(ast_node):
     copymod = builder.string_build(ast_node.as_string())
     if isinstance(copymod.body[0], astroid.Discard):
@@ -187,11 +193,6 @@ def get_node_var_assign(dfg, node):
 
     return None
 
-counter = 0
-def unique_var(s):
-    global counter
-    counter += 1
-    return s+str(counter)
 
 def subgraph_first_location(nodes_to_replace):
     min_idx = sys.maxint
@@ -271,21 +272,25 @@ def make_modcode_preface(dfg, nodes_to_replace, inp_nodes, in_edges, assumptions
     #cprint('preface loc: %i (%s)' % (preface_loc, insert_before.as_string()), 'green')
 
     #print "Assumptions: ", assumptions
+    behavior_varname = unique_var('behavior')
     if len(assumptions) > 0:
         #cprint("Inserting assumption code before stmt %i: %s " % (first_stmt_idx, first_stmt.as_string()), "blue")
-        behavior_varname = unique_var('behavior')
         assumption_code = ' and '.join(['('+expr.replace('{1}', source_names[n])+')'
             for (n,expr) in assumptions.iteritems()])
         #cprint ("Assumption code: " + assumption_code, "blue")
         stmts.append(make_assign_stmt(behavior_varname, assumption_code, insert_before.parent))
     else:
-        behavior_varname = None
+        stmts.append(make_assign_stmt(behavior_varname, 'True', insert_before.parent))
     return stmts, insert_before, source_names, behavior_varname
 
-def connect_new_code_to_outputs(out_node, input_nodes, scope_input_names, new_expr, behavior_var,
+def connect_new_code_to_outputs(out_node, input_nodes, scope_input_names, new_code, behavior_var,
         cur_behavior, guards):
     """
-    Change the targets of the out edges to use the new calculation given by new_expr
+    We handle two cases here:
+    1. If out_node is a loop (For/While), new_code is a statement that replaces the block.
+    2. Otherwise, new_code should be an expression, and we hange the targets of the out edges to use
+    its value
+
     """
     # Replace the source of the out edges with the new variable
 
@@ -293,17 +298,16 @@ def connect_new_code_to_outputs(out_node, input_nodes, scope_input_names, new_ex
     # in the copy... so we change the original then replace the original with the copy,
     # then use the original as the newstmts in update_guards
     stmt_orig = get_statement(out_node.ast_node)
-    stmt_copy = copy_astroid_node(stmt_orig)
 
     # Replace the placeholders (which look like {n})
     for i,n in enumerate(input_nodes):
-        new_expr = new_expr.replace('{%i}'%i, scope_input_names[n, stmt_orig.scope()])
+        new_code = new_code.replace('{%i}'%i, scope_input_names[n, stmt_orig.scope()])
 
-    newexpr_ast = builder.string_build(new_expr).body[0].value
-    #print "Replace in ", out_node.ast_node.parent, out_node.ast_node.as_string(), 'with', newexpr_ast.as_string()
-    stmt_new = copy_ast_node_replace_descendent(stmt_orig, out_node.ast_node, newexpr_ast)
-    #replace_child(out_node.ast_node.parent, out_node.ast_node, newexpr_ast)
-    # Goes before the first out edge
+    if isinstance(out_node, DataFlowGraph.LoopNode):
+        stmt_new = builder.string_build(new_code).body[0]
+    else:
+        newexpr_ast = builder.string_build(new_code).body[0].value
+        stmt_new = copy_ast_node_replace_descendent(stmt_orig, out_node.ast_node, newexpr_ast)
 
     local_bv = scope_input_names[(behavior_var, stmt_orig.scope())]
     print "connecting output nodes, if %s=%i: %s; else: %s" % (local_bv, cur_behavior,
@@ -316,9 +320,11 @@ def connect_new_code_to_outputs(out_node, input_nodes, scope_input_names, new_ex
 
 
 
-def replace_subgraph_and_code(dfg, nodes_to_replace, input_nodes, new_expr, assumptions):
+def replace_subgraph_and_code(dfg, nodes_to_replace, input_nodes, new_code, assumptions):
     """
 
+    input_nodes: a list of nodes in the dfg that correspond to the variables required by new_code.
+        Each {i} in new_code will be replaced with the value of the ith input_node.
     assumptions: a dict of pairs (dfg_node: expr) where expr is a string.  To test each assumption,
         {1} will be replaced with the value of the corresponding dfg node's runtime output and the
         resulting string will be evaluated.
@@ -331,11 +337,11 @@ def replace_subgraph_and_code(dfg, nodes_to_replace, input_nodes, new_expr, assu
        was executed.
     3. Delete all statements relating to the unconnected (to output) nodes of the graph
     4. Before the first statment that is the target of an out edge, insert a statement
-       representing the new calculation (new_expr) and assigning it to a variable name
+       representing the new calculation (new_code) and assigning it to a variable name
     5. For every node connected to an out edge -- give the relevant (new) expression a name, and use that
        name to replace the old expression (note there can be only one out node but many out edges)
     6. Because the inital scope (where in edges are) and final scope (where the new expression and the
-       out edges are) may be different, carry data from the first to the second via. new function args.
+       out edges are) may be different, carry data from the first to the second via new function args.
 
     for 3-5, we insert If/Else guards such that the original code will be executed if assumptions are not
         met.
@@ -396,13 +402,17 @@ def replace_subgraph_and_code(dfg, nodes_to_replace, input_nodes, new_expr, assu
         done.add(n.line.stmt_idx)
 
     # Change the targets of the out edges to use the new calculation.
-    connect_new_code_to_outputs(out_node, input_nodes, scope_input_names, new_expr, behavior_var,
+    connect_new_code_to_outputs(out_node, input_nodes, scope_input_names, new_code, behavior_var,
             behavior_ids[out_node.call_context], guards)
 
     instantiate_if_guards(guards)
 
+    scopes = {n.ast_node.scope() for n in nodes_to_replace}
+    do_implement_revised_functions(scopes, first_scope)
+
+
+def do_implement_revised_functions(scopes, first_scope):
     # Find all the scopes we need to change
-    scopes = partition(nodes_to_replace, lambda n: n.ast_node.scope())
     print "number of scopes to change:", len(scopes)
     for scope in scopes:
         if scope != first_scope:
@@ -604,6 +614,25 @@ def instantiate_if_guards(guards):
         loc = stmt.parent.body.index(stmt)
         stmt.parent.body[loc] = ig.to_ast()
         stmt.parent = ig
+
+#def replace_block(dfg, block, input_nodes, new_expr, assumptions):
+#    in_edges = {e for e in dfg.edges if e.n2 == block}
+#    out_edges = {e for e in dfg.edges if e.n1 == block}
+#
+#    preface_stmts, insert_before, source_names, behavior_var = make_modcode_preface(dfg, [block],
+#            input_nodes, in_edges, assumptions)
+#
+#    stmt = block.ast_node
+#
+#    ig = IfGuard(behavior_var, stmt.parent)
+#    ig.possible_vals.append(2)
+#    ig.actions.append(block_if_equal)
+#    ig.orelse = block_if_neq
+#    guards[stmt] = ig
+
+
+
+
 
 def edit_function(func, module, ln_start, ln_end, newlines):
     orig_source = list(inspect.getsourcelines(func)[0])

@@ -12,6 +12,8 @@ import data_flow
 from data_flow import DataFlowGraph
 import matrix_chain
 import modcode
+import cythonify
+import __builtin__
 from util import *
 
 DRYRUN = False
@@ -31,7 +33,7 @@ def onError(e):
 class Optimizer(object):
     def choose_function_to_optimize(self, prof_tree, max_nesting=1):
         """
-        choose function that we spend a lot of time on but doesn't have "too many" nested calls
+        choose a function that we spend a lot of time on but doesn't have deep nested calls
         to other functions.
         """
         candidates = []
@@ -54,7 +56,7 @@ class Optimizer(object):
 
         #XXX Debug code
         #self.candidates = candidates
-        #print "Optimize candidates", candidates
+        print "Optimize candidates", candidates
 
         return longest
 
@@ -67,6 +69,32 @@ class Optimizer(object):
         It's much more straightforward to gather info on the initial pass though...
         """
         pass
+
+    def optimize_loops(self, func, dfg):
+
+        print "optimize_loops called with", func, dfg
+
+        loops = [n for n in dfg.nodes if isinstance(n, DataFlowGraph.LoopNode)]
+        longest_loop = loops[0]
+        for loop in loops[1:]:
+            if loop.runtime > longest_loop.runtime:
+                longest_loop = loop
+
+        loopfn, argnames, retnames = cythonify.loop_to_cython(dfg, longest_loop)
+        __builtin__.myloopfn = loopfn
+        if retnames:
+            newexpr = (''.join([r+',' for r in retnames]) + ' = ' +
+                    'myloopfn(' + ','.join(argnames) + ')' )
+        else:
+            newexpr = 'myloopfn(' + ','.join(argnames) + ')'
+        cprint("new expression is "+ newexpr, 'blue')
+
+        in_edges = dfg.get_incoming_edges(longest_loop)
+
+        if not DRYRUN:
+            modcode.replace_subgraph_and_code(dfg, [longest_loop], [e.n1 for e in in_edges],
+                    newexpr, assumptions={})
+
 
     def optimize_matrix_chain(self, func, dfg):
         """

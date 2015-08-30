@@ -370,7 +370,11 @@ def analyze_loop(dfg, start_line, loop_ast, local_assignments, call_context):
     for od in outside_deps:
         dfg.add_loop_dependency(od, loop_node, call_context)
 
-    print "Analyze loop for", hash(child_dfg), " advances", stmt_idx-start_line.stmt_idx
+    # Propagate the external deps of the child upward
+    dfg.update_external_deps(child_dfg)
+
+    # Add the appropriate LoopStats
+    loop_node.stats = dfg.loop_stats[start_line.stmt_idx]
 
     return stmt_idx-start_line.stmt_idx, outside_deps
 
@@ -712,10 +716,17 @@ class DataFlowGraph(object):
         return e
 
     def add_external_dep(self, var, line, ast_node):
-        if var in self.external_deps:
+        if (var, get_enclosing_scope(ast_node)) in self.external_deps:
             self.external_deps[var, get_enclosing_scope(ast_node)].append((line, ast_node))
         else:
             self.external_deps[var, get_enclosing_scope(ast_node)] = [(line, ast_node)]
+
+    def update_external_deps(self, other_dfg):
+        for (k,v) in other_dfg.external_deps.iteritems():
+            if k in self.external_deps:
+                self.external_deps[k].extend(v)
+            else:
+                self.external_deps[k] = list(v) # Copy it
 
     def add_loop(self, line, loop_ast, child_dfg, call_context):
         n = self.LoopNode(line, loop_ast, call_context)
