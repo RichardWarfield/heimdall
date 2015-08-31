@@ -32,6 +32,9 @@ class FunctionWatcher(object):
         func is a tuple (filename, funcname)
         needed is a list/tuple of NeededInfo objects
         """
+
+        # TODO: track each NeededInfo request separately..
+        # Separate "watch for profiling" from "watch for information"
         self.profile = []
         self.stack = []
         self.loopstack = []
@@ -104,7 +107,7 @@ class FunctionWatcher(object):
                 #print "trace_line evaluating the following expression: ", expr
                 #print "trace_line getting needed_info for hash %i at (%s, %i):"%(self.tracer_hash, filename, lineno), ni
                 try:
-                    res = eval(ni.expr, frame.f_globals, frame.f_locals)
+                    res = ni.transform(eval(ni.expr, frame.f_globals, frame.f_locals))
                 except Exception as detail:
                     print detail
                     raise
@@ -244,8 +247,9 @@ class NeededInfo(object):
 
     ast_node can be an astroid node or a of astroid nodes.
     """
-    def __init__(self, stmt_sequence, stmt_idx, expr, dfg_node=None):
+    def __init__(self, stmt_sequence, stmt_idx, expr, dfg_node=None, transform=lambda x: x):
         self.stmt_sequence, self.stmt_idx, self.expr, self.dfg_node = stmt_sequence, stmt_idx, expr, dfg_node
+        self.transform = transform
 
     def __repr__(self):
         return "NeededInfo: "+str((self.stmt_sequence[self.stmt_idx][0],
