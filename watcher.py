@@ -2,18 +2,21 @@ import sys
 import __main__
 import time
 import cpu_tools
-import pdb
 import os.path
 import copy
 import astroid
 from termcolor import cprint
 from pprint import pprint
 from aplus import Promise
+import collections
 
 import code_reader
 
 import logging
 logger = logging.getLogger(__name__)
+
+
+WatchRequest = collections.namedtuple('WatchRequest', ('needed_info', 'saved_info', 'callback'))
 
 class FunctionWatcher(object):
     def __init__(self):
@@ -27,7 +30,40 @@ class FunctionWatcher(object):
         self.line_to_asts = {}
         self.loop_limit = 1
 
-    def watch_next_invocation(self, func, callback, needed=None):
+        # A mapping from (filename, funcname) tuples to lists of WatchRequests
+        # A request is a tuple of (NeededInfo, saved info, callback)
+        self.requests = {}
+        # A map from hashed statement sequences to NeededInfo lists.  This is so we can
+        # quickly determine whether the line we are on has a NeededInfo while tracing.
+        self.ni_hashmap = {}
+
+        self.profiling = False
+
+
+    def profile_next_invocation(self, func, callback):
+        """
+        func is a tuple (filename, funcname)
+        """
+        assert len(self.info_requests) == 0
+
+        self.profile = []
+        self.stack = []
+        self.loopstack = []
+        self.loopstats = {} # Map from stmt_idx to LoopStats
+
+        self.tracer_hash = 0
+        self.target_func = func
+
+        # XXX Why do I need to use both settrace and setprofile?  settrace doesn't
+        # XXX trigger on return events, and setprofile doesn't trigger on line events...
+        self.profiling = True
+        self.old_trace, self.old_profile = sys.gettrace(), sys.getprofile()
+        sys.settrace(self.trace_cb)
+        sys.setprofile(self.profile_cb)
+        self.finished_callback = callback
+
+
+    def get_info_on_next_invocation(self, func, callback, needed):
         """
         func is a tuple (filename, funcname)
         needed is a list/tuple of NeededInfo objects
@@ -35,29 +71,30 @@ class FunctionWatcher(object):
 
         # TODO: track each NeededInfo request separately..
         # Separate "watch for profiling" from "watch for information"
-        self.profile = []
+        assert not self.profiling
         self.stack = []
         self.loopstack = []
         self.loopstats = {} # Map from stmt_idx to LoopStats
         if isinstance(needed, NeededInfo):
             needed = (needed,)
 
+        request = WatchRequest(needed_info, {}, callback)
+        if func in self.info_requests:
+            self.info_requests[func].append(request)
+        else:
+            self.info_requests[func] = [request]
+
         self.tracer_hash = 0
-        self.needed_info = {}
-        if needed:
-            for ni in needed:
-                hsh = 0
-                for i in range(ni.stmt_idx+1):
-                    hsh += hash(ni.stmt_sequence[i])
-                    #cprint ("adding to hash %s: %i"%(str(ni.stmt_sequence[i]), hsh), 'green')
-                self.needed_info[hsh] = ni
+        for ni in needed:
+            hsh = 0
+            for i in range(ni.stmt_idx+1):
+                hsh += hash(ni.stmt_sequence[i])
+                #cprint ("adding to hash %s: %i"%(str(ni.stmt_sequence[i]), hsh), 'green')
+            if hsh in self.ni_hashmap:
+                self.ni_hashmap[hsh].append(ni)
+            else:
+                self.ni_hashmap[hsh] = [ni]
 
-        #cprint("hashed needed_info:", "blue")
-        #pprint(self.needed_info)
-
-        #self.needed_info = {ni.line: ni for ni in needed} if needed else {}
-        self.saved_info = {} # Stores the needed_info results
-        #sys.settrace(self.trace_cb)
         self.target_func = func
 
         # XXX Why do I need to use both settrace and setprofile?  settrace doesn't
@@ -69,7 +106,6 @@ class FunctionWatcher(object):
 
     def loop_at(self, filename, lineno):
 
-        # Parse the relevant files into AST.  A dict comprehension!!
         if filename not in self.line_to_asts:
             self.line_to_asts[filename] = code_reader.make_line_to_asts(filename)
         for st in self.line_to_asts[filename][lineno]:
