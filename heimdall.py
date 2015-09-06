@@ -14,14 +14,14 @@ import runsnakerun.pstatsloader
 from threading import Thread
 import profile
 
-import optimizer, data_flow, watcher
+import optimizer.optimizer, data_flow, watcher
 import logging
 logger = logging.getLogger(__name__)
 
 class Heimdall(object):
     def __init__(self, max_nesting=2, prof_shot_time=4):
         self.done = False
-        self.optimizer = optimizer.Optimizer()
+        self.optimizer = optimizer.optimizer.Optimizer()
         self.watcher = watcher.FunctionWatcher()
         self.max_nesting = max_nesting
         self.prof_shot_time = prof_shot_time
@@ -42,17 +42,17 @@ class Heimdall(object):
 
         #print "Got p_callback"
         target_func = self.optimizer.choose_function_to_optimize(stattree, self.max_nesting)
-        target = os.path.abspath(os.path.join(target_func.directory, target_func.filename)), target_func.name
-        print "Going to watch for %s" % str(target)
+        self.target = os.path.abspath(os.path.join(target_func.directory, target_func.filename)), target_func.name
+        print "Going to watch for %s" % str(self.target)
 
-        self.watcher.watch_next_invocation(target, self.watcher_callback)
+        self.watcher.profile_next_invocation(self.target, self.watcher_callback)
 
-    def watcher_callback(self, line_history):
-        #print "Line history:", line_history
-        self.dfg = data_flow.analyze_flow(self.watcher.tracer, self.watcher.loopstats)
+    def watcher_callback(self, line_history, loopstats):
+        print "Line history:", line_history, "; Going to start analysis"
+        self.dfg = data_flow.analyze_flow(line_history, loopstats)
         #print "Going to start optimizer test now"
-        #self.optimizer.optimize_matrix_chain(self.watcher.target_func, self.dfg)
-        #self.optimizer.optimize_loops(self.watcher.target_func, self.dfg)
+        #self.optimizer.optimize_matrix_chain(self.target, self.dfg)
+        self.optimizer.optimize_loops(self.target, self.dfg)
 
 
 

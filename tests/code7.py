@@ -20,5 +20,5 @@ def f1(a,b,c):
         for j in range(c):
             res = res + np.dot(s[i], t[:,j])
 
-    return res
+    return np.array(res)
 

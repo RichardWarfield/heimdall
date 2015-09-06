@@ -679,3 +679,6 @@ def get_indent(line):
         idt += line[i]
         i += 1
     return idt
+
+def indent(text, numSpaces):
+    return "\n".join((numSpaces * " ") + i for i in text.splitlines())

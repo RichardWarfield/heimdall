@@ -14,6 +14,7 @@ import matrix_chain
 import modcode
 import cythonify
 import __builtin__
+from . import loops
 from util import *
 
 DRYRUN = False
@@ -56,7 +57,7 @@ class Optimizer(object):
 
         #XXX Debug code
         #self.candidates = candidates
-        print "Optimize candidates", candidates
+        #print "Optimize candidates", candidates
 
         return longest
 
@@ -74,26 +75,13 @@ class Optimizer(object):
 
         print "optimize_loops called with", func, dfg
 
-        loops = [n for n in dfg.nodes if isinstance(n, DataFlowGraph.LoopNode)]
-        longest_loop = loops[0]
-        for loop in loops[1:]:
+        allloops = [n for n in dfg.nodes if isinstance(n, DataFlowGraph.LoopNode)]
+        longest_loop = allloops[0]
+        for loop in allloops[1:]:
             if loop.runtime > longest_loop.runtime:
                 longest_loop = loop
 
-        loopfn, argnames, retnames = cythonify.loop_to_cython(dfg, longest_loop)
-        __builtin__.myloopfn = loopfn
-        if retnames:
-            newexpr = (''.join([r+',' for r in retnames]) + ' = ' +
-                    'myloopfn(' + ','.join(argnames) + ')' )
-        else:
-            newexpr = 'myloopfn(' + ','.join(argnames) + ')'
-        cprint("new expression is "+ newexpr, 'blue')
-
-        in_edges = dfg.get_incoming_edges(longest_loop)
-
-        if not DRYRUN:
-            modcode.replace_subgraph_and_code(dfg, [longest_loop], [e.n1 for e in in_edges],
-                    newexpr, assumptions={})
+        loops.optimize_loop(longest_loop, func, dfg)
 
 
     def optimize_matrix_chain(self, func, dfg):
@@ -106,8 +94,8 @@ class Optimizer(object):
         4) for each chain, calculate the optimal order, generate a new expression, and
            call replace_subgraph_and_code to put it in.
         """
+        print "optimize_matrix_chain called with", func, dfg
         assumptions = {}
-
 
         done_chains = {}
         subchains = set() # Chains that are reachable recursively; these are not full chains
@@ -190,8 +178,6 @@ class Optimizer(object):
                 #print "func is", func
 
 
-
-
         def get_dot_shapes(funccall_info):
             #print "In get dot shapes with funccall_info", funccall_info
             need_arg_shapes = []
@@ -210,15 +196,10 @@ class Optimizer(object):
 
 
         # Get (references to) all the function calls in the graph
-        #print "Nodes", dfg.nodes
+        print "Nodes", dfg.nodes
         func_calls = [NeededInfo(dfg.stmt_sequence, n.line.stmt_idx, n.ast_node.func.as_string(), n)
                 for n in dfg.nodes if isinstance(n, DataFlowGraph.ExtCallNode)]
-        #print "func_calls looking for info for "
-        #pprint(func_calls)
+        print "func_calls looking for info for "
+        pprint(func_calls)
         p = watcher.get_runtime_info(func, func_calls).then(get_dot_shapes).then(optimize_chain_inner).done(None, onError)
-
-
-
-
-
 

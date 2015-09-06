@@ -103,8 +103,8 @@ def follow_statements_until_return(dfg, start_idx, call_context, arg_assignments
             st = list(dfg.line_to_asts[filename][lineno])[0]
             assert isinstance(st, astroid.Return)
             #print "*** Returning from ", st.as_string()
-            print "Finished follow_statements_until_return, final assignments are:"
-            pprint(local_assignments)
+            #print "Finished follow_statements_until_return, final assignments are:"
+            #pprint(local_assignments)
             return (st, stmt_idx-start_idx+1)
             #return_from = (filename,lineno,st)
 
@@ -112,7 +112,7 @@ def follow_statements_until_return(dfg, start_idx, call_context, arg_assignments
             assert False, "Don't know what to do with event %s" % event
 
         stmt_idx += 1
-        print "Next idx:", stmt_idx
+        #print "Next idx:", stmt_idx
 
     return None, stmt_idx-start_idx+1
 
@@ -120,7 +120,7 @@ def process_one_statement(dfg, line, local_assignments, call_context, include_bo
     """
     Returns number of statements advancned
     """
-    print "Processing ", line, "for DFG", hash(dfg)
+    #print "Processing ", line, "for DFG", hash(dfg)
     stmt_idx = line.stmt_idx
     filename, lineno, event = dfg.stmt_sequence[stmt_idx]
     asts = dfg.line_to_asts[filename][lineno]
@@ -148,8 +148,8 @@ def process_one_statement(dfg, line, local_assignments, call_context, include_bo
             raise NotImplementedError("Don't know how to processs statement of type %s"
                     % type(st))
 
-    cprint("Processing '%s...' consumed %d statements"% (st.as_string()[:10],
-        stmt_idx-line.stmt_idx), 'green')
+    #cprint("Processing '%s...' consumed %d statements"% (st.as_string()[:10],
+        #stmt_idx-line.stmt_idx), 'green')
     return stmt_idx - line.stmt_idx
 
 def process_assign(dfg, st, line, local_assignments, call_context):
@@ -166,10 +166,8 @@ def process_assign(dfg, st, line, local_assignments, call_context):
     for target in st.targets:
         # If it's a simple name assignment...
         if isinstance(target, astroid.AssName):
-            if not (type(st.value) is astroid.CallFunc
-                    and get_func_def(st.value, dfg.filenames, st) is not None):
-                e = dfg.add_assign_edge(line, call_context, target, st.value)
-                local_assignments[e.label] = LocalAssignment(e, dfg)
+            e = dfg.add_assign_edge(line, call_context, target, st.value)
+            local_assignments[e.label] = LocalAssignment(e, dfg)
         elif isinstance(target, astroid.AssAttr):
             raise NotImplementedError() # TODO
         elif isinstance(target, astroid.Subscript):
@@ -260,7 +258,7 @@ def follow_function_calls(dfg, fncalls, line, stmt_idx, local_assignments, call_
     for (line_call_order, fcall) in enumerate(fncalls):
         func_def = get_func_def(fcall, dfg.filenames, fcall)
         if func_def is not None:
-            print "Going to follow_function_call: ", fcall.as_string(), 'stmt is ', stmt_idx
+            #print "Going to follow_function_call: ", fcall.as_string(), 'stmt is ', stmt_idx
             stmt_idx,_ = follow_function_call(dfg, fcall, func_def, line, stmt_idx+1,
                     local_assignments, line_call_order, call_context)
 
@@ -324,7 +322,7 @@ def analyze_loop(dfg, start_line, loop_ast, local_assignments, call_context):
 
     Returns (# stmts advanced, variable dependencies in loop)
     """
-    print "Analyzing loop starting at", start_line
+    #print "Analyzing loop starting at", start_line
     child_dfg = DataFlowGraph(dfg.stmt_sequence, dfg.line_to_asts, dfg.filenames, dfg.loop_stats)
     stmt_idx = start_line.stmt_idx
 
@@ -599,7 +597,7 @@ class DataFlowGraph(object):
         self.edges.add(e3)
 
     def add_assign_use_edge(self, asmt_line, use_line, call_context, asmt_node, use_node):
-        n1 = self.get_node_for_ast(asmt_node) or self.VarAssignNode(asmt_line, asmt_node, call_context)
+        n1 = self.get_node_for_line_ast(asmt_line, asmt_node) or self.VarAssignNode(asmt_line, asmt_node, call_context)
         n2 = self.find_or_create_value_node(use_line, use_node, call_context)
         self.nodes.add(n1)
         self.nodes.add(n2)
@@ -806,8 +804,8 @@ class DataFlowGraph(object):
             return self.ExprNode(line, ast_node, call_context)
 
 
-    def get_node_for_ast(self, ast_node):
-        v = [n for n in self.nodes if n.ast_node == ast_node]
+    def get_node_for_line_ast(self, line, ast_node):
+        v = [n for n in self.nodes if (n.line == line and n.ast_node == ast_node)]
         assert len(v) <= 1
         if len(v) == 1:
             return v[0]
@@ -870,6 +868,21 @@ class DataFlowGraph(object):
     def is_external_call(self, callfunc):
         """ callfunc is an astroid.CallFunc node """
         return (get_func_def(callfunc, self.filenames, callfunc) is not None)
+
+    def get_nodes_deep(self):
+        """ Generator that returns all the nodes in the dfg, and any child (loop)
+        dfg"""
+        yielded = set()
+        for n in self.nodes:
+            if n not in yielded:
+                yield n
+                yielded.add(n)
+            if isinstance(n, self.LoopNode):
+                for nn in n.dfg.get_nodes_deep():
+                    if nn not in yielded:
+                        yield nn
+                        yielded.add(nn)
+
 
     def subgraph_between(self, start_nodes, end_node):
         """
