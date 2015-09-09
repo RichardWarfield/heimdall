@@ -53,6 +53,8 @@ class FunctionWatcher(object):
 
         self.profiling = False
 
+        self._abspath_cache = {}
+
 
     def profile_next_invocation(self, func, callback):
         """
@@ -129,7 +131,7 @@ class FunctionWatcher(object):
                 return
             co = frame.f_code
             func_name = co.co_name
-            filename, lineno = os.path.abspath(frame.f_code.co_filename), frame.f_lineno
+            filename, lineno = self.fast_abspath(frame.f_code.co_filename), frame.f_lineno
 
             for fws in self.watching_funcs.values():
                 skip_trace = self.update_looping_status(frame, filename, lineno, fws)
@@ -156,6 +158,7 @@ class FunctionWatcher(object):
                         fws.tracer.append((filename, lineno, event))
         except:
             logging.exception("Yikes!~ Exception in trace_line")
+            raise
 
 
     def profile_cb(self, frame, event, arg):
@@ -163,7 +166,7 @@ class FunctionWatcher(object):
         try:
             co = frame.f_code
             func_name = co.co_name
-            filename, lineno = os.path.abspath(frame.f_code.co_filename), frame.f_lineno
+            filename, lineno = self.fast_abspath(frame.f_code.co_filename), frame.f_lineno
             #print "In profile_cb: %s, %s, %i, tracing is %s" % (event, func_name, lineno, str(self.tracing))
 
             if event in ('call',):
@@ -245,6 +248,7 @@ class FunctionWatcher(object):
                         cprint( "frame %s wasn't in frames_being_traced" % frame, 'red')
         except:
             logging.exception("Yikes!~ Exception in profile_cb")
+            raise
 
 
     def update_looping_status(self, frame, filename, lineno, fws):
@@ -304,6 +308,15 @@ class FunctionWatcher(object):
         self.profiling = False
         sys.setprofile(None)#self.old_profile)
         sys.settrace(None)#self.old_trace)
+
+    def fast_abspath(self, fn):
+        try:
+            return self._abspath_cache[fn]
+        except KeyError:
+            self._abspath_cache[fn] = os.path.abspath(fn)
+            return self._abspath_cache[fn]
+
+
 
 class LoopStats(object):
     def __init__(self, loop_ast, frame):

@@ -826,7 +826,7 @@ class DataFlowGraph(object):
     def get_inputs(self, node):
         """ Returns the nodes that have edges to this node """
         # TODO make a less stupid implementation of this
-        return {e.n1 for e in self.edges if e.n2 == node}
+        return [e.n1 for e in self.edges if e.n2 == node]
 
     def get_inputs_multi(self, nodes):
         res = set()
