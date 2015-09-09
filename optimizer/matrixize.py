@@ -47,10 +47,17 @@ def to_array_op(loopnode, func_and_var_info):
             if len(indices_1) != len(indices_2):
                 continue
 
-            for i in range(len(indices_1)):
-                pass
-                # Check if it's a matched index
-                # Check if it's a sum-over index
+            for (i,idx1) in enumerate(indices_1):
+                for (j,idx2) in enumerate(indices_2):
+                    if idx1==idx2:
+                        # Provisionally, it's a matched index...
+                        roles[idx1] = ('MATCHED', idx1, (i,j))
+
+                if idx1 not in roles:
+                    roles[idx1] = ('SUM_OVER', (idx1, indices[2][i]), (i,i))
+
+            # And now, make sure each index is iterating over the values we think..
+
 
 
 
