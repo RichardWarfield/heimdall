@@ -10,12 +10,11 @@ import modcode
 import logging
 logger = logging.getLogger(__name__)
 
-class ArrayOp(object):
+class EinSumOp(object, operands, op_indices, out_indices):
     def __init__(self):
-        self.shape1
-        self.shape2
-        self.shape1_roles
-        self.shape2_roles
+        self.operands
+        self.op_indices # List of tuples, each having length [ndim of corresponding operand]
+        self.out_indices #
 
 def to_array_op(loopnode, func_and_var_info):
     # Identify which arrays are being operated on
@@ -44,19 +43,11 @@ def to_array_op(loopnode, func_and_var_info):
             except ValueError:
                 continue
 
-            if len(indices_1) != len(indices_2):
-                continue
-
-            for (i,idx1) in enumerate(indices_1):
-                for (j,idx2) in enumerate(indices_2):
-                    if idx1==idx2:
-                        # Provisionally, it's a matched index...
-                        roles[idx1] = ('MATCHED', idx1, (i,j))
-
-                if idx1 not in roles:
-                    roles[idx1] = ('SUM_OVER', (idx1, indices[2][i]), (i,i))
 
             # And now, make sure each index is iterating over the values we think..
+
+            out_indices = get_subscript_indices(assedge.n2) # TODO
+            return EinSumOp((inp1, inp2), (indices_1, indices_2), out_indices)
 
 
 
