@@ -55,7 +55,7 @@ class EinSumOp(object):
             #and loopnode.ast_node.iter.func.name in ('range', 'xrange'))
             target_ss = loopnode.ast_node.target.name
 
-    def subscripts_to_sets(self, subscripts, ext_funcs):
+    def subscripts_to_sets(self, subscripts, ext_funcs, loopnode):
         """
         Converts subscript expressions (ExprNodes) into "setbuilder notation"..
 
@@ -75,16 +75,42 @@ class EinSumOp(object):
         if any([ss_expr.has_branches() for ss_expr in ss_list]):
             raise NotImplementedError()
 
+        # Get all the loops
+        some_node = subscripts[0][0]
+        loop = some_node.dfg.node_in_parent
+        enclosing_loops = {} # A dictionary of variable -> loop
+        while loop is not None:
+            if not isinstance(loop.ast_node, astroid.For):
+                raise NotImplementedError()
+            if not isinstance(loop.target, astroid.AssName):
+                raise NotImplementedError()
+            enclosing_loops[loop.target.name] = loop
+            if loop == loopnode:
+                break
+
+
         # Check out the dependencies of the subscript expresssions. Categorize as:
         # - From iterators (e.g. a[i+1])
         # - Involve expression that are constant within the loop (e.g. a[a.shape[0]-i]
         # - Involve "very simple" manipulations within the loop
         #   (e.g. a[i]; i+=1) <-- TODO
         # - All others, which will cause a NotImplementedError to be raised
+        enclosing_loop_dfgs = {l.dfg for l in enclosing_loops.values()}
         for ss_expr in ss_list:
             # Get all the depdendencies:
             # Traverse backwards through the dfg, until we hit EITHER
-            # the iterator for a for loop; OR something outside the loop (XXX what loop?)
+            # the iterator for a for loop; OR something outside loopnode
+            to_visit = {n for n in ss_expr.dfg.get_incoming_nodes(ss_expr)}
+            while to_visit:
+                n = to_visit.pop()
+                if n in enclosing_loops:
+                    # Its a loop variable
+                    pass # OK!
+                elif constant_in_loop(n, loopnode):# TODO .dfg not in enclosing_loop_dfgs:
+                    # It's constant in the loop? XXX
+                    pass # OK!
+                else:
+                    n.dfg.get_last_transform(n)
 
 
         iterators = [ss_expr.for_loop_iterator() for ss_expr in ss_list]
