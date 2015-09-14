@@ -18,7 +18,7 @@ def loop_to_cython(dfg, loopnode, var_types):
 
         funname = util.unique_var("newfunc")
 
-        argnames = [e.label for e in in_edges] + [v[0] for v in loopnode.dfg.external_deps]
+        argnames = [e.label for e in in_edges] + [v[0] for v in loopnode.child_dfg.external_deps]
         args=[make_astroid_node(astroid.AssName, name=a) for a in argnames]
 
         retnames = [e.label for e in out_edges]

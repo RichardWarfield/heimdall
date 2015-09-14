@@ -215,3 +215,28 @@ def code_var_deps(code, glob, loc):
 
     res = dis.dis(code)
     return bindings
+
+def match_callfunc_args(call_node, def_node):
+    """
+    Figure out the correspondence between arguments in the call and parameters in the
+    definition.
+    This works by the following procedure:
+    1. Go left to right through all args, assigning to the corresponding position in the
+    definition
+    2. Then match keyword arguments by name
+
+    Return: a pair (assignment, value) where assignment is an AssName node.
+    TODO: varargs
+    """
+    #TODO *args, **kwargs
+    #XXX
+    res = []
+    params = def_node.args # An astroid.Arguments object
+    for (i,arg) in enumerate(call_node.args): # A plain list of expressions or Keyword objects
+        if isinstance(arg, astroid.Keyword):
+            p = [x for x in params.args if x.name == arg.arg][0]
+            res.append((p, arg))
+        else:
+            res.append((params.args[i], arg))
+    return res
+

@@ -361,6 +361,7 @@ def analyze_loop(dfg, start_line, loop_ast, local_assignments, call_context):
 
     loop_node = dfg.add_loop(start_line, loop_ast, child_dfg, call_context)
     child_dfg.node_in_parent = loop_node
+    assert loop_node != dfg.node_in_parent
 
     # Get the dependencies from outside the loop
     outside_deps = [e for e in child_dfg.edges
@@ -452,35 +453,13 @@ def get_dependencies_ex_body(st):
         vardeps, fncalls = get_dependencies(st)
     return vardeps, fncalls
 
-def match_callfunc_args(call_node, def_node):
-    """
-    Figure out the correspondence between arguments in the call and parameters in the
-    definition.
-    This works by the following procedure:
-    1. Go left to right through all args, assigning to the corresponding position in the
-    definition
-    2. Then match keyword arguments by name
-
-    Return: a pair (assignment, value) where assignment is an AssName node.
-    TODO: varargs
-    """
-    #TODO *args, **kwargs
-    #XXX
-    res = []
-    params = def_node.args # An astroid.Arguments object
-    for (i,arg) in enumerate(call_node.args): # A plain list of expressions or Keyword objects
-        if isinstance(arg, astroid.Keyword):
-            p = [x for x in params.args if x.name == arg.arg][0]
-            res.append((p, arg))
-        else:
-            res.append((params.args[i], arg))
-    return res
 
 class DataFlowGraph(object):
     class Node(object):
-        def __init__(self, line, ast_node, call_context):
+        def __init__(self, line, ast_node, call_context, dfg):
             assert isinstance(ast_node, astroid.node_classes.NodeNG)
             self.line, self.ast_node, self.call_context = line, ast_node, call_context
+            self.dfg = dfg
         def __hash__(self):
             return hash((self.line, self.ast_node))
         def __eq__(self, other):
@@ -514,8 +493,23 @@ class DataFlowGraph(object):
     class ExtCallNode(ExprNode):
         """ An ExtCallNode is an ExprNode that represents a call to a function external to this
         graph (i.e. we won't step through it).  The node needs to keep track of the call signature in
-        terms of the incoming edges -- i.e. edges are labelled in terms of their position or keyword """
-        pass
+        terms of the incoming edges -- i.e. edges are labelled in terms of their position or keyword
+        """
+        def get_args(self, signature):
+            """
+            signature: a tuple of the named parameters to this function, in order
+
+            Return a dictionary mapping parameters to corresponding nodes
+            """
+            in_edges = self.dfg.get_incoming_edges()
+            res = {}
+            for e in in_edges:
+                if isinstance(e.label, int):
+                    res[signature[e.label]]= e.n1
+                else:
+                    res[e.label] = e.n1
+            return res
+
 
     class SliceNode(Node):
         pass
@@ -572,7 +566,7 @@ class DataFlowGraph(object):
     def add_assign_edge(self, line, call_context, assname_node, val_node):
         # First node the the expression we are assigning to the variable
         n1 = self.find_or_create_value_node(line, val_node, call_context)
-        n2 = self.VarAssignNode(line, assname_node, call_context)
+        n2 = self.VarAssignNode(line, assname_node, call_context, self)
         self.nodes.add(n1)
         self.nodes.add(n2)
         e = self.AssignEdge(n1, n2, assname_node.name)
@@ -584,7 +578,7 @@ class DataFlowGraph(object):
         # TODO this needs to call find_or_create_value_node
         n2 = self.SliceNode(line, subscript.slice, call_context)
         n3 = self.find_or_create_value_node(line, subscript.value, call_context)
-        n4 = self.SetItemNode(line, subscript, call_context)
+        n4 = self.SetItemNode(line, subscript, call_context, self)
         self.nodes.add(n1)
         self.nodes.add(n2)
         self.nodes.add(n3)
@@ -597,7 +591,8 @@ class DataFlowGraph(object):
         self.edges.add(e3)
 
     def add_assign_use_edge(self, asmt_line, use_line, call_context, asmt_node, use_node):
-        n1 = self.get_node_for_line_ast(asmt_line, asmt_node) or self.VarAssignNode(asmt_line, asmt_node, call_context)
+        n1 = self.get_node_for_line_ast(asmt_line, asmt_node) \
+                or self.VarAssignNode(asmt_line, asmt_node, call_context, self)
         n2 = self.find_or_create_value_node(use_line, use_node, call_context)
         self.nodes.add(n1)
         self.nodes.add(n2)
@@ -621,18 +616,9 @@ class DataFlowGraph(object):
         self.edges.add(e)
         return e
 
-    #def add_callfunc_edge(self, stmt_idx, sourceline, call_node, func_node):
-    #    n1 = self.CallFuncNode(stmt_idx, sourceline[0], sourceline[1],call_node)
-    #    n2 = self.DefFuncNode(None, func_node.root().file, func_node.lineno, func_node)
-    #    assert n2 not in self.nodes, "Not handling multipe calls to a function yet"
-    #    self.nodes.add(n1)
-    #    self.nodes.add(n2)
-    #    e = self.CallFuncEdge(n1, n2, func_node.name)
-    #    self.edges.add(e)
-
     def add_external_call(self, line, call_context, callfunc_ast_node):
         #cprint("adding external callfunc node %s" % callfunc_ast_node.as_string(), 'red')
-        callnode = self.ExtCallNode(line, callfunc_ast_node, call_context)
+        callnode = self.ExtCallNode(line, callfunc_ast_node, call_context, self)
         # Remove if present
         # XXX OMG this is a mess!
         if callnode in self.nodes:
@@ -664,7 +650,7 @@ class DataFlowGraph(object):
         (in 0 ... num internal calls on the line)
         """
         # a pair (assignment, value) where assignment is an AssName node.
-        func_args = match_callfunc_args(fcall, func_def)
+        func_args = code_reader.match_callfunc_args(fcall, func_def)
 
         callee_ctx = DataFlowGraph.CallContext(caller_line, fcall, func_def)
         callee_ctx.line_call_order = line_call_order
@@ -680,9 +666,9 @@ class DataFlowGraph(object):
     def add_return_edge(self, from_line, to_line, from_call_context, to_call_context, ret_node, ret_to_node):
         n1 = self.find_or_create_value_node(from_line, ret_node.value, from_call_context)
         if isinstance(ret_to_node, astroid.AssName):
-            n2 = self.VarAssignNode(to_line, ret_to_node, to_call_context)
+            n2 = self.VarAssignNode(to_line, ret_to_node, to_call_context, self)
         else:
-            n2 = self.Node(to_line, ret_to_node, to_call_context)
+            n2 = self.Node(to_line, ret_to_node, to_call_context, self)
         self.nodes.add(n1)
         self.nodes.add(n2)
         e = self.ReturnEdge(n1, n2, '(return)')
@@ -693,7 +679,7 @@ class DataFlowGraph(object):
         # arg: a pair (assignment, value) where assignment is an AssName node.
         #print "Passing ", arg
         n1 = self.find_or_create_value_node(caller_line, val_ast, caller_context)
-        n2 = self.VarAssignNode(callee_line, assname, callee_context)
+        n2 = self.VarAssignNode(callee_line, assname, callee_context, self)
         self.nodes.add(n1)
         self.nodes.add(n2)
         e = self.ArgPassEdge(n1, n2, assname.name)
@@ -707,7 +693,7 @@ class DataFlowGraph(object):
         # TODO: this assert really should be here
         #assert isinstance(final_ast.parent, astroid.Discard) or isinstance(final_ast.parent, astroid.Return)
         n2 = self.TerminalNode(LineExec(None, final_ast.parent.root().file, final_ast.parent.lineno),
-                final_ast.parent, None)
+                final_ast.parent, None, self)
         self.nodes.add(n2)
         e = self.Edge(final_node, n2, 'terminal')
         self.edges.add(e)
@@ -727,9 +713,8 @@ class DataFlowGraph(object):
                 self.external_deps[k] = list(v) # Copy it
 
     def add_loop(self, line, loop_ast, child_dfg, call_context):
-        n = self.LoopNode(line, loop_ast, call_context)
-        n.dfg = child_dfg
-        n.this_dfg = self
+        n = self.LoopNode(line, loop_ast, call_context, self)
+        n.child_dfg = child_dfg
         self.nodes.add(n)
         return n
 
@@ -801,7 +786,7 @@ class DataFlowGraph(object):
         try:
             return self.find_value_node(line, ast_node)
         except ValueError:
-            return self.ExprNode(line, ast_node, call_context)
+            return self.ExprNode(line, ast_node, call_context, self)
 
 
     def get_node_for_line_ast(self, line, ast_node):
@@ -819,7 +804,7 @@ class DataFlowGraph(object):
         while next != None:
             if next in self.nodes:
                 return next
-            next = next.this_dfg.node_in_parent
+            next = next.dfg.node_in_parent
         raise ValueError("Block not found")
 
 
@@ -878,7 +863,7 @@ class DataFlowGraph(object):
                 yield n
                 yielded.add(n)
             if isinstance(n, self.LoopNode):
-                for nn in n.dfg.get_nodes_deep():
+                for nn in n.child_dfg.get_nodes_deep():
                     if nn not in yielded:
                         yield nn
                         yielded.add(nn)
