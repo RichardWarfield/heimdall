@@ -1,6 +1,7 @@
 
-* Assignments to "complex" l-values -- subscript, getitem, and maybe function calls
+* Assignments to "complex" l-values -- subscript, getitem, 
     * Including how to deal with dependencies on (parts of) compound objects
+    * Function calls like append and np.dot(... out=...)
 * Loops: For, While
 * Returning from within a loop
 * Internal call arguments that are not part of the optimizee - let them pass through.
@@ -38,3 +39,25 @@ DONE:
 
 Probably I will only deal with l-values that are "atomic" - i.e. no function calls or custom __getitem__/__getattr__
 To be careful, I should check that the "thing" I am changing is what I think it is
+
+
+* Matrixize...
+
+What kind of variables are "recursive"?  They depend on themselves, or on other recursive variables...
+A variable is non-recursive if:
+- It is never set in the loop; or
+- It is set before use in the loop, and depends only on loop iterator variables + constants within the loop
+
+An expresssion is non-recursive if it uses only non-recursive variables
+
+To do the analysis right I'm probably going to really have to do it during analyze_flow -- variables that are 
+used in a loop and are set to a value that depends on something set within the loop
+
+for x in range(13):
+    i = 1
+    print i
+
+so in other words check...
+- it is a dependency
+- it is (or may be) set somewhere in the loop
+- It is not a loop-invariant

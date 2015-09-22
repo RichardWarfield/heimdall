@@ -100,25 +100,12 @@ class EinSumOp(object):
             # Get all the depdendencies:
             # Traverse backwards through the dfg, until we hit EITHER
             # the iterator for a for loop; OR something outside loopnode
-            to_visit = {n for n in ss_expr.dfg.get_incoming_nodes(ss_expr)}
-            while to_visit:
-                n = to_visit.pop()
-                if n in enclosing_loops:
-                    # Its a loop variable
-                    pass # OK!
-                elif constant_in_loop(n, loopnode):# TODO .dfg not in enclosing_loop_dfgs:
-                    # It's constant in the loop? XXX
-                    pass # OK!
-                else:
-                    n.dfg.get_last_transform(n)
 
 
         iterators = [ss_expr.for_loop_iterator() for ss_expr in ss_list]
-        iter_targets = [ss_expr.
 
         for ss_expr in ss_list:
             # TODO - this should return the range() ExtCallNode
-            index_iterator =
             if isinstance(index_iterator, DataFlowGraph.ExtCallNode):
                 func = ext_funcs[index_iterator]
                 if func in (range, xrange):
@@ -127,6 +114,87 @@ class EinSumOp(object):
                     args = index_iterator.get_args(('start', 'stop', 'step', 'dtype'))
                 iset = IndexSet(args.get('start', 0), args['end'], args.get('step', 1))
                 sets[ss_expr] = iset
+
+
+    def is_iterative_loop_expression(self, exprnode, loop_stack):
+        to_visit = {n for n in exprnode.dfg.get_incoming_nodes(exprnode)}
+        while to_visit:
+            n = to_visit.pop()
+            if n in loop_assnames:
+                # Its a loop variable
+                pass # OK!
+            elif lexically_outside_loops(n, loopnode):# TODO .dfg not in enclosing_loop_dfgs:
+                pass # OK!
+            else:
+                to_visit.append(n.dfg.get_incoming_nodes(exprnode))
+
+            if isinstance(n.ast_node, astroid.Name):
+                # See if it's set in the loop
+                asmts = n.dfg.find_assignments(n) # This should return AssName ExprNodes
+                # Check if it's set in the loop stack - other than immediately above in the
+                # Same loop
+                for asmt in asmts:
+                    if lexically_outside_loops(asmt):
+                        # OK
+                        pass
+                    elif asmt
+
+
+    def is_iterative_loop_var(self, exprnode, loopnode):
+        """
+        This function detects which variables are iterative variables (i.e. whose values
+        depend on calculations performed in prior iterations of the loop).  It does this by:
+        1. Detecting which variables A are altered in the loop
+        2. Figuring out what other variables in A each variable in A depends on
+        3. Detecting cycles.  Any variable in A that is part of a cycle is an iterative loop
+           variable.
+
+        Ways it can be assigned within the loop:
+        1- Assignment (duh)
+        2- setitem
+        3- setattr
+        4- Certain known external mutating functions, such as  mutating functions on lists e.g.
+        append, extend, and numpy calls with out= parameter
+        Note that 2-5 can be done in a subroutine.
+
+        Note it is also possible that we call some "weird" external function that changes
+        the variable somehow.  That possibility needs to be excluded elsewhere (we generally
+        won't optimize loops that call arbitrary external functions).
+        """
+        # First deal with straight assignments
+        # Get all the things being set somewhere in the loop
+        vars_set_somewhere = []
+
+        assigns = loopnode.call_context.local_assignments[exprnode.ast_node.name]
+        for var, (ass_edge, dfg) in loopnode.call_context.local_assignments.iteritems():
+            # If it's not lexically in the loop, we don't care
+            if not lexically_outside_loop(ass_edge.n1, loopnode):
+                vars_set_somewhere.append((var, ass_edge))
+
+        for namenode in names_in_loop: # External deps + local_assignments
+            # Follow DFG to see if it's used somewhere in a setitem/setattr/mutating func
+            # before leaving the loop...
+            to_visit = set([namenode])
+            visited = set()
+            while to_visit:
+                n = to_visit.pop()
+                # TODO some nodes on the path will cause the variable to lose its "identity"
+                # so that it cannot longer be changed...
+                if isinstance(n, DataFlowGraph.SetItemNode) and n.sliced_target in visited:
+                    vars_set_somewhere.append((namenode.ast_node.name, n))
+                elif isinstance(n, DataFlowGraph.ExtCallNode):
+                    func = ext_funcs[n]
+                    #if isinstance(func, np.dot):
+                    raise NotImplementedError()
+
+                visited.add(n)
+
+        # Now figure out which vars_set_somewhere depend on something within vars_set_somewhere
+        for var in vars_set_somewhere:
+            deps = dependencies_in_loop(var)
+            for dep in deps:
+                if dep in vars_set_somewhere:
+
 
 
 

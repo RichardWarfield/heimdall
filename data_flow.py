@@ -350,10 +350,6 @@ def analyze_loop(dfg, start_line, loop_ast, local_assignments, call_context):
         elif event == 'return':
             # TODO XXX
             raise NotImplementedError("Returning from inside loop")
-            #st = list(dfg.line_to_asts[filename][lineno])[0]
-            #assert isinstance(st, astroid.Return)
-            #print "*** Returning from ", st.as_string()
-            #return (st, stmt_idx-start_idx+1)
 
         else:
             assert False, "Don't know what to do with event %s" % event
@@ -586,6 +582,7 @@ class DataFlowGraph(object):
         e1 = self.Edge(n1, n4, 'new value')
         e2 = self.Edge(n2, n4, 'slice')
         e3 = self.Edge(n3, n4, 'slice into')
+        n4.sliced_target = n2
         self.edges.add(e1)
         self.edges.add(e2)
         self.edges.add(e3)
@@ -798,6 +795,10 @@ class DataFlowGraph(object):
             return None
 
     def find_block_containing(self, child_dfg):
+        """
+        Find the block (LoopNode) that contains the LoopNode corresponding to child_dfg by
+        moving up through the stack of loops.
+        """
         assert self != child_dfg
 
         next = child_dfg.node_in_parent
